@@ -381,14 +381,7 @@ export default function (pi: ExtensionAPI) {
   const fileApiBase = normalizeBaseUrl(resolveEnv("KIMI_FILE_API_BASE") || DEFAULT_KIMI_FILE_API_BASE);
   const capabilities = getProviderCapabilities("kimi-for-coding", baseUrl);
 
-  console.log(`[Kimi For Coding] Initializing with ${baseUrl}...`);
-  console.log(`[Kimi For Coding] ${resolveEnv("KIMI_API_KEY") ? "KIMI_API_KEY found" : "KIMI_API_KEY not set"}`);
-  console.log(`[Kimi For Coding] Provider: ${capabilities.provider} | API style: ${capabilities.apiStyle}`);
-  console.log(`[Kimi For Coding] Capability path: local-workspace-context`);
-  console.log(`[Kimi For Coding] Capabilities: ${JSON.stringify({
-    ...capabilities,
-    baseUrl,
-  })}`);
+
 
   // ── Register Provider ─────────────────────────────────────────────────────
   pi.registerProvider("kimi-for-coding", {
@@ -595,9 +588,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  console.log("[Kimi For Coding] Registered successfully");
-  console.log("[Kimi For Coding] Tools: kimi_upload");
-  console.log("[Kimi For Coding] Commands: /kimi-cleanup, /kimi-files");
+
 
   // expose guard helper usage path so it doesn't get tree-shaken as dead code
   void getRemoteFileContent;
