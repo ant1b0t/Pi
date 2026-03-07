@@ -1,0 +1,19 @@
+{
+    "query":  "open claw repository github",
+    "meta":  {
+                 "unique":  {
+
+                            },
+                 "elapsed_ms":  872,
+                 "providers":  [
+                                   "exa",
+                                   "tavily"
+                               ],
+                 "total":  0,
+                 "cached":  false
+             },
+    "success":  true,
+    "results":  {
+
+                }
+}

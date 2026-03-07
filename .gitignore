@@ -1,0 +1,31 @@
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+*.swp
+*.swo
+
+# API keys — never commit real credentials
+.env
+
+.pi/agent-sessions/
+.pi/research-cache/
+
+# Cache directories
+.cache/
+.npm/
+.bun/
+.parcel-cache/
+.turbo/
+.vercel/
+.next/
+
+# Project specific caches
+.playwright-cli/
+.playwright/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
+tmp/

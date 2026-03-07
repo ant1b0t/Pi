@@ -1,0 +1,7 @@
+{
+  "theme": "synthwave",
+  "prompts": [
+    "../.claude/commands"
+  ],
+  "extensions": []
+}
