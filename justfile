@@ -75,6 +75,22 @@ ext-session-replay:
 ext-theme-cycler:
     pi -e extensions/theme-cycler.ts -e extensions/minimal.ts
 
+# 17. Kimi provider: adds Moonshot models via Extension API
+ext-provider-kimi:
+    pi -e extensions/provider-kimi.ts -e extensions/minimal.ts
+
+# 17a. Kimi with reasoning (K2 models)
+ext-provider-kimi-reasoning:
+    pi -e extensions/provider-kimi.ts -e extensions/minimal.ts --model kimi-k2-128k
+
+# 17b. Kimi K2.5 with vision support
+ext-provider-kimi-vision:
+    pi -e extensions/provider-kimi.ts -e extensions/minimal.ts --model kimi-k2.5
+
+# 17c. Kimi with base tools (search, todo, etc.)
+ext-provider-kimi-full:
+    pi -e extensions/provider-kimi.ts -e extensions/base-tools.ts -e extensions/minimal.ts
+
 # utils
 
 # Open pi with one or more stacked extensions in a new terminal: just open minimal tool-counter
@@ -105,3 +121,6 @@ all:
     just open damage-control minimal theme-cycler
     just open agent-chain theme-cycler
     just open pi-pi theme-cycler
+    just open provider-kimi minimal
+    just open provider-kimi-reasoning minimal
+    just open provider-kimi-vision minimal
