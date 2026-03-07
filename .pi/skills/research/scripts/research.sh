@@ -70,22 +70,12 @@ find_jq() {
         return 0
     fi
     
-    # Common Windows locations (Git Bash format)
-    if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ -n "${WINDIR:-}" ]]; then
-        local windows_jq="/c/Users/${USERNAME:-$USER}/AppData/Local/Microsoft/WinGet/Packages/jqlang.jq_Microsoft.Winget.Source_8wekyb3d8bbwe/jq.exe"
-        
-        if [[ -f "$windows_jq" ]]; then
-            echo "$windows_jq"
-            return 0
-        fi
-        
-        # Try with .exe extension
-        if command -v jq.exe &> /dev/null; then
-            echo "jq.exe"
-            return 0
-        fi
+    # Try with .exe extension
+    if command -v jq.exe &> /dev/null; then
+        echo "jq.exe"
+        return 0
     fi
-    
+
     # Ubuntu/Debian common location
     if [[ -f "/usr/bin/jq" ]]; then
         echo "/usr/bin/jq"
