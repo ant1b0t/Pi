@@ -18,4 +18,4 @@
 - Ask the user instead of guessing when multiple interpretations are valid.
 - Prefer read/search/list before mutate.
 - Keep retries, batching, deduplication, and orchestration in code when possible.
-- Use the full `tool-design-standards.md` when creating or changing tool contracts.
+- Use the full `reference/tool-design-standards.md` when creating or changing tool contracts.

@@ -163,10 +163,13 @@ pi-vs-cc/
 │   ├── themes/          # Custom themes (.json) used by theme-cycler
 │   ├── damage-control-rules.yaml # Path/command rules for safety auditing
 │   └── settings.json    # Pi workspace settings
+├── docs/                # Project documentation
+│   ├── comparisons/     # Comparisons with other tools
+│   ├── reference/       # Reference materials and standards
+│   ├── architecture/    # Implementation and migration plans
+│   └── agent_context.md # Agent context summary
 ├── justfile             # just task definitions
-├── CLAUDE.md            # Conventions and tooling reference (for agents)
-├── THEME.md             # Color token conventions for extension authors
-└── TOOLS.md             # Built-in tool function signatures available in extensions
+└── CLAUDE.md            # Conventions and tooling reference (for agents)
 ```
 
 ---
@@ -209,13 +212,13 @@ The `damage-control` extension provides real-time security hooks to prevent cata
 
 Companion docs cover the conventions used across all extensions in this repo:
 
-- **[COMPARISON.md](COMPARISON.md)** — Feature-by-feature comparison of Claude Code vs Pi Agent across 12 categories (design philosophy, tools, hooks, SDK, enterprise, and more).
-- **[PI_VS_OPEN_CODE.md](PI_VS_OPEN_CODE.md)** — Architectural comparison of Pi Agent vs OpenCode (open-source Claude Code alternative) focusing on extension capabilities, event lifecycle, and UI customization.
-- **[RESERVED_KEYS.md](RESERVED_KEYS.md)** — Pi reserved keybindings, overridable keys, and safe keys for extension authors.
-- **[THEME.md](THEME.md)** — Color language: which Pi theme tokens (`success`, `accent`, `warning`, `dim`, `muted`) map to which UI roles, with examples.
-- **[TOOLS.md](TOOLS.md)** — Function signatures for the built-in tools available inside extensions (`read`, `bash`, `edit`, `write`).
-- **[tool-design-standards.md](tool-design-standards.md)** — Canonical tool design standard: naming, schemas, responses, errors, token efficiency, and anti-patterns.
-- **[agent_context.md](agent_context.md)** — Compact tool-policy digest for agents and reviewers.
+- **[COMPARISON.md](docs/comparisons/COMPARISON.md)** — Feature-by-feature comparison of Claude Code vs Pi Agent across 12 categories (design philosophy, tools, hooks, SDK, enterprise, and more).
+- **[PI_VS_OPEN_CODE.md](docs/comparisons/PI_VS_OPEN_CODE.md)** — Architectural comparison of Pi Agent vs OpenCode (open-source Claude Code alternative) focusing on extension capabilities, event lifecycle, and UI customization.
+- **[RESERVED_KEYS.md](docs/reference/RESERVED_KEYS.md)** — Pi reserved keybindings, overridable keys, and safe keys for extension authors.
+- **[THEME.md](docs/reference/THEME.md)** — Color language: which Pi theme tokens (`success`, `accent`, `warning`, `dim`, `muted`) map to which UI roles, with examples.
+- **[TOOLS.md](docs/reference/TOOLS.md)** — Function signatures for the built-in tools available inside extensions (`read`, `bash`, `edit`, `write`).
+- **[tool-design-standards.md](docs/reference/tool-design-standards.md)** — Canonical tool design standard: naming, schemas, responses, errors, token efficiency, and anti-patterns.
+- **[agent_context.md](docs/agent_context.md)** — Compact tool-policy digest for agents and reviewers.
 
 ---
 
