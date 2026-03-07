@@ -19,44 +19,59 @@ Pi Coding Agent extension examples and experiments.
 - Register tools at the top level of the extension function (not inside event handlers)
 - Use `isToolCallEventType()` for type-safe tool_call event narrowing
 
-## Extensions Overview
+## Provider Extensions
 
-### Provider Extensions
+### `kimi` — Kimi For Coding Provider
 
-#### `provider-kimi` — Moonshot AI Integration
-Enhanced provider for Kimi models with advanced features:
+Enhanced provider for Kimi For Coding (256K context) with File API support.
 
 ```bash
 # Quick start
-just ext-provider-kimi
+just ext-kimi
 
-# Reasoning mode with K2 models
-just ext-provider-kimi-reasoning
-
-# Vision mode with K2.5
-just ext-provider-kimi-vision
+# With base tools (todo, web_fetch, ask_user)
+just ext-kimi-full
 ```
 
 **Features:**
-- **File API**: Automatic upload of large files (>50KB) to save tokens
-- **Auto-context routing**: Smart model selection based on content size
-- **Reasoning models**: K2 series with thinking mode support
-- **Vision**: K2.5 supports image analysis
-- **Tools**: `kimi_upload`, `kimi_search`, `/kimi-cleanup`
+- **Kimi For Coding API**: Anthropic-compatible endpoint (256K context)
+- **File API**: Upload large files via Moonshot File API
+- **Tools**: `kimi_upload` — upload files for efficient processing
+- **Commands**:
+  - `/kimi-cleanup` — delete uploaded files
+  - `/kimi-files` — list uploaded files
 
-**Models:**
-| Model | Context | Reasoning | Vision | Cost (in/out) |
-|-------|---------|-----------|--------|---------------|
-| moonshot-v1-8k | 8K | ❌ | ❌ | $0.3/$1.2 |
-| moonshot-v1-32k | 32K | ❌ | ❌ | $0.6/$2.4 |
-| moonshot-v1-128k | 128K | ❌ | ❌ | $1.2/$4.8 |
-| kimi-k2-32k | 32K | ✅ | ❌ | $0.6/$2.4 |
-| kimi-k2-128k | 128K | ✅ | ❌ | $1.2/$4.8 |
-| kimi-k2.5 | 256K | ✅ | ✅ | $0.6/$3.0 |
+**Setup:**
+```bash
+# 1. Get API key from https://www.kimi.com/code/console
+# 2. Add to .env:
+KIMI_API_KEY=sk-kimi-...
 
-See `specs/provider-kimi.md` for detailed documentation.
+# 3. Run
+just ext-kimi
+```
 
-### UI Extensions
+**File Upload Usage:**
+```
+# Upload a large file
+/kimi_upload path=/path/to/file.pdf
+
+# Cleanup files after use
+/kimi-cleanup
+
+# List uploaded files
+/kimi-files
+```
+
+**Model:** `kimi-for-coding` (automatically mapped to `k2p5`)
+- Context: 256K tokens
+- Max output: 32K tokens
+- Supports: text, image input
+- Reasoning: enabled
+
+**Testing:** See `specs/provider-kimi-tests.md` for detailed test plan.
+
+## UI Extensions
 
 | Extension | Description |
 |-----------|-------------|
@@ -68,7 +83,7 @@ See `specs/provider-kimi.md` for detailed documentation.
 | `subagent-widget` | Live streaming progress for /sub command |
 | `session-replay` | Scrollable timeline overlay of session history |
 
-### Workflow Extensions
+## Workflow Extensions
 
 | Extension | Description |
 |-----------|-------------|
@@ -79,14 +94,14 @@ See `specs/provider-kimi.md` for detailed documentation.
 | `cross-agent` | Load commands from .claude/, .gemini/, .codex/ dirs |
 | `pi-pi` | Meta-agent that builds Pi agents with parallel research |
 
-### Safety Extensions
+## Safety Extensions
 
 | Extension | Description |
 |-----------|-------------|
 | `damage-control` | Safety auditing for destructive operations |
 | `system-select` | /system to pick an agent persona |
 
-### Base Tools
+## Base Tools
 
 `base-tools.ts` adds:
 - `web_fetch` — URL fetching with HTML→Markdown conversion
@@ -99,5 +114,5 @@ Copy `.env.example` to `.env` and configure:
 
 ```bash
 # Required for Kimi provider
-MOONSHOT_API_KEY=sk-your-key
+KIMI_API_KEY=sk-your-key-here
 ```

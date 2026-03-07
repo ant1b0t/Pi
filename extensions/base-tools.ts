@@ -223,7 +223,7 @@ export default function (pi: ExtensionAPI) {
 				ctx.theme.fg("success", ` All tasks completed! `),
 			]);
 		} else {
-			ctx.ui.setWidget("todos", null);
+			ctx.ui.setWidget("todos", undefined);
 		}
 	};
 
