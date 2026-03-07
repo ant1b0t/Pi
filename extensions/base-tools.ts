@@ -38,7 +38,7 @@ function decodeHtmlEntities(text: string): string {
 		amp: '&', lt: '<', gt: '>', quot: '"', apos: "'",
 		nbsp: ' ', copy: '©', reg: '®', trade: '™',
 		mdash: '—', ndash: '–', hellip: '…', laquo: '«', raquo: '»',
-		ldquo: '"', rdquo: '"', lsquo: ''', rsquo: ''',
+		ldquo: '"', rdquo: '"', lsquo: "'", rsquo: "'",
 		bull: '•', middot: '·', sect: '§', para: '¶'
 	};
 
