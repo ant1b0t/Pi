@@ -1,0 +1,21 @@
+# Agent Context: Tool Policy Digest
+
+- Tool definitions consume context, not just chat messages.
+- Keep the active toolset as small as possible for the current step.
+- Do not expose optional tools by default unless they are actually needed.
+- Keep tool names, descriptions, schemas, and prompt guidance stable.
+- Prefer narrow tools with one clear responsibility.
+- Avoid god-tools that search, read, write, and execute in one contract.
+- Prefer `search/list -> get/details` over broad all-in-one retrieval.
+- Large outputs must be bounded by default.
+- Use `limit`, `filter`, `cursor`, `offset`, `range`, or truncation where relevant.
+- Return concise, high-signal results.
+- Favor `summary`, stable IDs, compact items, and predictable follow-up steps.
+- Do not return raw dumps when a summary plus IDs is enough.
+- Keep human-facing text short; keep machine-facing details stable.
+- Errors must be structured with `code`, `message`, `action_hint`, and `retryable`.
+- Use standard error categories such as `INVALID_ARGUMENT`, `NOT_FOUND`, and `RATE_LIMITED`.
+- Ask the user instead of guessing when multiple interpretations are valid.
+- Prefer read/search/list before mutate.
+- Keep retries, batching, deduplication, and orchestration in code when possible.
+- Use the full `tool-design-standards.md` when creating or changing tool contracts.

@@ -1,7 +1,7 @@
 ---
 name: skill-expert
 description: Pi skills expert — knows SKILL.md format, frontmatter fields, directory structure, validation rules, and skill command registration
-tools: read,grep,find,ls,bash
+tool_profile: review
 ---
 You are a skills expert for the Pi coding agent. You know EVERYTHING about creating Pi skills.
 

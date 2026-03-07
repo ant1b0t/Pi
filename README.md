@@ -82,7 +82,7 @@ bun install
 | **subagent-widget**     | `extensions/subagent-widget.ts`     | `/sub <task>` command that spawns background Pi subagents; each gets its own streaming live-progress widget                                                |
 | **tilldone**            | `extensions/tilldone.ts`            | Task discipline system — define tasks before starting work; tracks completion state across steps; shows persistent task list in footer with live progress  |
 | **agent-team**          | `extensions/agent-team.ts`          | Dispatcher-only orchestrator: the primary agent delegates all work to named specialist agents via `dispatch_agent`; shows a grid dashboard                 |
-| **system-select**       | `extensions/system-select.ts`       | `/system` command to interactively switch between agent personas/system prompts from `.pi/agents/`, `.claude/agents/`, `.gemini/agents/`, `.codex/agents/` |
+| **system-select**       | `extensions/system-select.ts`       | `/system` command to switch agent personas/system prompts; supports profile-based tool activation via `tool_profile` in agent frontmatter |
 | **damage-control**      | `extensions/damage-control.ts`      | Real-time safety auditing — intercepts dangerous bash patterns and enforces path-based access controls from `.pi/damage-control-rules.yaml`                |
 | **agent-chain**         | `extensions/agent-chain.ts`         | Sequential pipeline orchestrator — chains multiple agents where each step's output feeds into the next step's prompt; use `/chain` to select and run       |
 | **pi-pi**               | `extensions/pi-pi.ts`               | Meta-agent that builds Pi agents using parallel research experts for documentation                                                                         |
@@ -214,6 +214,8 @@ Companion docs cover the conventions used across all extensions in this repo:
 - **[RESERVED_KEYS.md](RESERVED_KEYS.md)** — Pi reserved keybindings, overridable keys, and safe keys for extension authors.
 - **[THEME.md](THEME.md)** — Color language: which Pi theme tokens (`success`, `accent`, `warning`, `dim`, `muted`) map to which UI roles, with examples.
 - **[TOOLS.md](TOOLS.md)** — Function signatures for the built-in tools available inside extensions (`read`, `bash`, `edit`, `write`).
+- **[tool-design-standards.md](tool-design-standards.md)** — Canonical tool design standard: naming, schemas, responses, errors, token efficiency, and anti-patterns.
+- **[agent_context.md](agent_context.md)** — Compact tool-policy digest for agents and reviewers.
 
 ---
 

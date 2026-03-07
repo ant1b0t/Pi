@@ -18,6 +18,9 @@ Pi Coding Agent extension examples and experiments.
 - Available imports: `@mariozechner/pi-coding-agent`, `@mariozechner/pi-tui`, `@mariozechner/pi-ai`, `@sinclair/typebox`, plus any deps in package.json
 - Register tools at the top level of the extension function (not inside event handlers)
 - Use `isToolCallEventType()` for type-safe tool_call event narrowing
+- For tool design and contract changes, follow `tool-design-standards.md`
+- Use `agent_context.md` as the short operational summary; read `tool-design-standards.md` when creating tools or changing names, descriptions, schemas, responses, or errors
+- For agent personas in `.pi/agents/*.md`, prefer `tool_profile` over long repeated `tools:` lists when a standard profile fits
 
 ## Provider Extensions
 

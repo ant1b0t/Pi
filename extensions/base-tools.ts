@@ -1,10 +1,12 @@
 /**
- * base-tools — Glob, Grep, Ls, WebFetch, Todo, AskUser
+ * base-tools — WebFetch, Todo, AskUser
  *
- * Activates built-in Pi tools (grep, find, ls) and adds:
+ * Adds:
  *   • web_fetch  — URL fetching with HTML→Markdown conversion
  *   • todo       — task list with UI widget and /todos command
  *   • ask_user   — interactive dialog with question and answer options
+ *
+ * Optional built-in tools like grep/find/ls should be enabled explicitly.
  *
  * Usage: pi -e extensions/base-tools.ts
  *        pi --tools read,bash,edit,write,grep,find,ls -e extensions/base-tools.ts
@@ -15,6 +17,7 @@ import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-cod
 import { DEFAULT_MAX_BYTES, DynamicBorder, formatSize, truncateHead } from "@mariozechner/pi-coding-agent";
 import { Container, Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
+import { conciseDetails, invalidArgument, notFound, rateLimited, temporaryUnavailable, unauthorized } from "./lib/tool-contract.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -111,10 +114,11 @@ interface Todo {
 }
 
 interface TodoDetails {
+	summary: string;
 	action: "list" | "add" | "done" | "toggle" | "clear" | "cancel";
 	todos: Todo[];
 	nextId: number;
-	error?: string;
+	id?: number;
 }
 
 /** Панель /todos — показывает список с прогресс-баром */
@@ -281,13 +285,6 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	pi.on("session_start", async (_e, ctx) => {
-		// Активируем встроенные тулзы grep / find / ls
-		const active = pi.getActiveTools();
-		const toAdd = ["grep", "find", "ls"].filter((t) => !active.includes(t));
-		if (toAdd.length > 0) {
-			pi.setActiveTools([...active, ...toAdd]);
-		}
-
 		reconstructTodos(ctx);
 		updateWidget(ctx);
 	});
@@ -350,31 +347,28 @@ export default function (pi: ExtensionAPI) {
 		async execute(_id, params, signal) {
 			const { url, format = "markdown", timeout } = params;
 
-			// Strict URL validation with SSRF protection
 			let parsedUrl: URL;
 			try {
 				parsedUrl = new URL(url);
 			} catch {
-				throw new Error("Invalid URL: unable to parse");
+				throw invalidArgument("Unable to parse URL", "Provide a valid http:// or https:// URL");
 			}
 			
-			// Protocol check
 			if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-				throw new Error("URL must use http:// or https:// protocol");
+				throw invalidArgument("URL must use http:// or https://", "Retry with an http or https URL");
 			}
 			
-			// SSRF protection: block private/internal addresses
 			const blockedHostnames = ["localhost", "127.0.0.1", "0.0.0.0", "[::1]", "[::]"];
 			const hostname = parsedUrl.hostname.toLowerCase();
 			if (blockedHostnames.includes(hostname) || hostname.startsWith("127.") || hostname.startsWith("10.") || hostname.startsWith("192.168.") || /^172\.(1[6-9]|2[0-9]|3[01])\./.test(hostname)) {
-				throw new Error("Access to local/internal addresses is not allowed");
+				throw invalidArgument("Local or internal addresses are not allowed", "Retry with a public URL");
 			}
 
-			// Таймаут
-			const timeoutMs = Math.min(
-				(timeout ?? WEB_FETCH_TIMEOUT_MS / 1000) * 1000,
-				WEB_FETCH_MAX_TIMEOUT_MS,
-			);
+			if (timeout !== undefined && (timeout < 1 || timeout > WEB_FETCH_MAX_TIMEOUT_MS / 1000)) {
+				throw invalidArgument("timeout must be between 1 and 120 seconds", "Retry with timeout in the range 1-120");
+			}
+
+			const timeoutMs = (timeout ?? WEB_FETCH_TIMEOUT_MS / 1000) * 1000;
 
 			// Fetch with retry logic and exponential backoff
 			let response: Response | undefined;
@@ -440,11 +434,26 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (!response) {
-				throw lastError || new Error("Failed to fetch URL after multiple attempts");
+				if (lastError) {
+					throw temporaryUnavailable(lastError.message, "Retry in a moment or try bash with curl for diagnostics");
+				}
+				throw temporaryUnavailable("Failed to fetch URL after multiple attempts", "Retry in a moment or try bash with curl for diagnostics");
 			}
 
 			if (!response.ok) {
-				throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+				if (response.status === 401 || response.status === 403) {
+					throw unauthorized(`HTTP ${response.status}: ${response.statusText}`, "Check whether the URL requires authentication or different headers");
+				}
+				if (response.status === 404) {
+					throw notFound("URL returned 404 Not Found", "Verify the URL and retry");
+				}
+				if (response.status === 429) {
+					throw rateLimited("Remote server rate limited the request", "Retry later or reduce request frequency");
+				}
+				if (response.status >= 500) {
+					throw temporaryUnavailable(`HTTP ${response.status}: ${response.statusText}`, "Retry later or use bash with curl for diagnostics");
+				}
+				throw invalidArgument(`HTTP ${response.status}: ${response.statusText}`, "Check the URL and retry with different parameters if needed");
 			}
 
 			const rawText = await response.text();
@@ -477,13 +486,17 @@ export default function (pi: ExtensionAPI) {
 
 			return {
 				content: [{ type: "text" as const, text: result }],
-				details: {
-					url,
-					format,
-					contentType,
-					truncated: truncation.truncated,
-					bytes: truncation.outputBytes,
-				},
+				details: conciseDetails(
+					`Fetched ${url}${truncation.truncated ? " (truncated)" : ""}`,
+					{
+						url,
+						format,
+						contentType,
+						truncated: truncation.truncated,
+						bytes: truncation.outputBytes,
+						totalBytes: truncation.totalBytes,
+					},
+				),
 			};
 		},
 
@@ -553,66 +566,63 @@ export default function (pi: ExtensionAPI) {
 							: "No tasks";
 					return {
 						content: [{ type: "text" as const, text }],
-						details: { action: "list", todos: [...todos], nextId: nextTodoId } as TodoDetails,
+						details: { summary: `Listed ${todos.length} task(s)`, action: "list", todos: [...todos], nextId: nextTodoId } as TodoDetails,
 					};
 				}
 
 				case "add": {
-					if (!params.text) throw new Error("Parameter 'text' is required for action=add");
-					while (todos.some((t) => t.id === nextTodoId)) {
-						nextTodoId++;
-					}
+					if (!params.text) throw invalidArgument("text is required for action=add", "Retry with a non-empty text field");
+					while (todos.some((t) => t.id === nextTodoId)) nextTodoId++;
 					const t: Todo = { id: nextTodoId++, text: params.text, done: false, cancelled: false };
 					todos.push(t);
 					return {
 						content: [{ type: "text" as const, text: `Added #${t.id}: ${t.text}` }],
-						details: { action: "add", todos: [...todos], nextId: nextTodoId } as TodoDetails,
+						details: { summary: `Added task #${t.id}`, action: "add", todos: [...todos], nextId: nextTodoId, id: t.id } as TodoDetails,
 					};
 				}
 
 				case "done": {
-					if (params.id === undefined) throw new Error("Parameter 'id' is required for action=done");
+					if (params.id === undefined) throw invalidArgument("id is required for action=done", "Retry with the task id to mark complete");
 					const todo = todos.find((t) => t.id === params.id);
-					if (!todo) throw new Error(`Task #${params.id} not found`);
+					if (!todo) throw notFound(`Task #${params.id} not found`, "Call todo list to inspect valid task IDs");
 					todo.cancelled = false;
 					todo.done = true;
 					return {
 						content: [{ type: "text" as const, text: `Task #${todo.id} completed ✓` }],
-						details: { action: "done", todos: [...todos], nextId: nextTodoId } as TodoDetails,
+						details: { summary: `Completed task #${todo.id}`, action: "done", todos: [...todos], nextId: nextTodoId, id: todo.id } as TodoDetails,
 					};
 				}
 
 				case "toggle": {
-					if (params.id === undefined) throw new Error("Parameter 'id' is required for action=toggle");
+					if (params.id === undefined) throw invalidArgument("id is required for action=toggle", "Retry with the task id to toggle");
 					const todo = todos.find((t) => t.id === params.id);
-					if (!todo) throw new Error(`Task #${params.id} not found`);
+					if (!todo) throw notFound(`Task #${params.id} not found`, "Call todo list to inspect valid task IDs");
 					todo.cancelled = false;
 					todo.done = !todo.done;
 					return {
 						content: [{ type: "text" as const, text: `Task #${todo.id} ${todo.done ? "completed" : "reopened"} ✓` }],
-						details: { action: "toggle", todos: [...todos], nextId: nextTodoId } as TodoDetails,
+						details: { summary: `${todo.done ? "Completed" : "Reopened"} task #${todo.id}`, action: "toggle", todos: [...todos], nextId: nextTodoId, id: todo.id } as TodoDetails,
 					};
 				}
 
 				case "cancel": {
-					if (params.id === undefined) throw new Error("Parameter 'id' is required for action=cancel");
+					if (params.id === undefined) throw invalidArgument("id is required for action=cancel", "Retry with the task id to cancel");
 					const todo = todos.find((t) => t.id === params.id);
-					if (!todo) throw new Error(`Task #${params.id} not found`);
+					if (!todo) throw notFound(`Task #${params.id} not found`, "Call todo list to inspect valid task IDs");
 					todo.done = false;
 					todo.cancelled = true;
 					return {
 						content: [{ type: "text" as const, text: `Task #${todo.id} cancelled` }],
-						details: { action: "cancel", todos: [...todos], nextId: nextTodoId } as TodoDetails,
+						details: { summary: `Cancelled task #${todo.id}`, action: "cancel", todos: [...todos], nextId: nextTodoId, id: todo.id } as TodoDetails,
 					};
 				}
 
 				case "clear": {
 					const count = todos.length;
 					todos = [];
-					// Не сбрасываем nextTodoId, чтобы избежать дублирования ID
 					return {
 						content: [{ type: "text" as const, text: `Cleared ${count} tasks` }],
-						details: { action: "clear", todos: [], nextId: nextTodoId } as TodoDetails,
+						details: { summary: `Cleared ${count} task(s)`, action: "clear", todos: [], nextId: nextTodoId } as TodoDetails,
 					};
 				}
 			}
@@ -632,8 +642,6 @@ export default function (pi: ExtensionAPI) {
 				const t = result.content[0];
 				return new Text(t?.type === "text" ? t.text : "", 0, 0);
 			}
-
-			if (d.error) return new Text(theme.fg("error", `Error: ${d.error}`), 0, 0);
 
 			const list = d.todos;
 
@@ -728,9 +736,11 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	interface AskDetails {
+		summary: string;
 		question: string;
 		options: string[];
 		answer: string | null;
+		status: "answered" | "cancelled" | "unavailable";
 		wasCustom?: boolean;
 	}
 
@@ -754,7 +764,13 @@ export default function (pi: ExtensionAPI) {
 			if (!ctx.hasUI) {
 				return {
 					content: [{ type: "text" as const, text: "UI unavailable (non-interactive mode)" }],
-					details: { question: params.question, options: params.options ?? [], answer: null } as AskDetails,
+					details: {
+						summary: "User interaction unavailable",
+						question: params.question,
+						options: params.options ?? [],
+						answer: null,
+						status: "unavailable",
+					} as AskDetails,
 				};
 			}
 
@@ -869,7 +885,13 @@ export default function (pi: ExtensionAPI) {
 				if (!result) {
 					return {
 						content: [{ type: "text" as const, text: "User cancelled the selection" }],
-						details: { question: params.question, options, answer: null } as AskDetails,
+						details: {
+							summary: "User cancelled selection",
+							question: params.question,
+							options,
+							answer: null,
+							status: "cancelled",
+						} as AskDetails,
 					};
 				}
 				return {
@@ -882,9 +904,11 @@ export default function (pi: ExtensionAPI) {
 						},
 					],
 					details: {
+						summary: result.wasCustom ? "User provided custom answer" : "User selected option",
 						question: params.question,
 						options,
 						answer: result.answer,
+						status: "answered",
 						wasCustom: result.wasCustom,
 					} as AskDetails,
 				};
@@ -895,12 +919,24 @@ export default function (pi: ExtensionAPI) {
 			if (answer === undefined || answer === null) {
 				return {
 					content: [{ type: "text" as const, text: "User cancelled input" }],
-					details: { question: params.question, options: [], answer: null } as AskDetails,
+					details: {
+						summary: "User cancelled input",
+						question: params.question,
+						options: [],
+						answer: null,
+						status: "cancelled",
+					} as AskDetails,
 				};
 			}
 			return {
 				content: [{ type: "text" as const, text: `User answered: ${answer}` }],
-				details: { question: params.question, options: [], answer } as AskDetails,
+				details: {
+					summary: "User answered question",
+					question: params.question,
+					options: [],
+					answer,
+					status: "answered",
+				} as AskDetails,
 			};
 		},
 
@@ -922,14 +958,17 @@ export default function (pi: ExtensionAPI) {
 				const t = result.content[0];
 				return new Text(t?.type === "text" ? t.text : "", 0, 0);
 			}
-			if (d.answer === null) {
+			if (d.status === "unavailable") {
+				return new Text(theme.fg("warning", "UI unavailable"), 0, 0);
+			}
+			if (d.status === "cancelled") {
 				return new Text(theme.fg("warning", "Cancelled"), 0, 0);
 			}
 			const prefix = d.wasCustom
 				? theme.fg("muted", "(wrote) ")
 				: theme.fg("muted", "(selected) ");
 			return new Text(
-				theme.fg("success", "✓ ") + prefix + theme.fg("accent", d.answer),
+				theme.fg("success", "✓ ") + prefix + theme.fg("accent", d.answer ?? ""),
 				0,
 				0,
 			);
