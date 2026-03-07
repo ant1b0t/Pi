@@ -12,15 +12,14 @@
 
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
-import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "@mariozechner/pi-coding-agent";
-import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth } from "@mariozechner/pi-tui";
+import { DEFAULT_MAX_BYTES, DynamicBorder, formatSize, truncateHead } from "@mariozechner/pi-coding-agent";
+import { Container, Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-const TODO_PROGRESS_BAR_WIDTH = 10;
 const TODO_TITLE_PADDING = 10;
 const WEB_FETCH_MAX_RETRIES = 3;
 const WEB_FETCH_BASE_BACKOFF_MS = 1000;
@@ -108,10 +107,11 @@ interface Todo {
 	id: number;
 	text: string;
 	done: boolean;
+	cancelled?: boolean;
 }
 
 interface TodoDetails {
-	action: "list" | "add" | "done" | "toggle" | "clear";
+	action: "list" | "add" | "done" | "toggle" | "clear" | "cancel";
 	todos: Todo[];
 	nextId: number;
 	error?: string;
@@ -153,22 +153,29 @@ class TodoListComponent {
 		if (this.todos.length === 0) {
 			lines.push(truncateToWidth("  " + th.fg("dim", "No tasks."), width));
 		} else {
-			const done = this.todos.filter((t) => t.done).length;
-			const total = this.todos.length;
-
-			// Минималистичный прогресс-бар (точки)
-			const filled = total > 0 ? Math.round((done / total) * TODO_PROGRESS_BAR_WIDTH) : 0;
-			const dots = th.fg("success", "●".repeat(filled)) + th.fg("dim", "○".repeat(TODO_PROGRESS_BAR_WIDTH - filled));
-			const progress = th.fg("accent", `${done}/${total}`) + "  " + dots;
+			const dots = this.todos.map((t) =>
+				t.cancelled
+					? th.fg("warning", "◌")
+					: t.done
+						? th.fg("success", "●")
+						: th.fg("dim", "○")
+			).join("");
 			
-			lines.push(truncateToWidth("  " + progress, width));
+			lines.push(truncateToWidth("  " + dots, width));
 			lines.push("");
 
 			for (const todo of this.todos) {
-				const check = todo.done ? th.fg("success", "●") : th.fg("dim", "○");
-				const id = th.fg("accent", `#${todo.id}`);
-				const text = todo.done ? th.fg("dim", todo.text) : th.fg("text", todo.text);
-				lines.push(truncateToWidth(`  ${check} ${id} ${text}`, width));
+				if (todo.cancelled) {
+					const check = th.fg("dim", "×");
+					const id = th.fg("dim", `#${todo.id}`);
+					const text = th.fg("dim", todo.text);
+					lines.push(truncateToWidth(`  ${check} ${id} ${text}`, width));
+				} else {
+					const check = todo.done ? th.fg("success", "●") : th.fg("dim", "○");
+					const id = th.fg("accent", `#${todo.id}`);
+					const text = todo.done ? th.fg("dim", todo.text) : th.fg("text", todo.text);
+					lines.push(truncateToWidth(`  ${check} ${id} ${text}`, width));
+				}
 			}
 		}
 
@@ -204,27 +211,73 @@ export default function (pi: ExtensionAPI) {
 			const msg = entry.message;
 			if (msg.role !== "toolResult" || msg.toolName !== "todo") continue;
 			const d = msg.details as TodoDetails | undefined;
-			if (d) {
+			if (d && Array.isArray(d.todos) && typeof d.nextId === "number") {
 				todos = d.todos;
 				nextTodoId = d.nextId;
 			}
+		}
+		// Защита: если после восстановления nextId слишком маленький, корректируем
+		const maxId = todos.reduce((max, t) => Math.max(max, t.id), 0);
+		if (nextTodoId <= maxId) {
+			nextTodoId = maxId + 1;
 		}
 	};
 
 	const updateWidget = (ctx: ExtensionContext) => {
 		if (!ctx.hasUI) return;
-		const pending = todos.filter((t) => !t.done).length;
-		if (pending > 0) {
-			ctx.ui.setWidget("todos", [
-				ctx.theme.fg("warning", ` Pending: ${pending} tasks `),
-			]);
-		} else if (todos.length > 0) {
-			ctx.ui.setWidget("todos", [
-				ctx.theme.fg("success", ` All tasks completed! `),
-			]);
-		} else {
-			ctx.ui.setWidget("todos", undefined);
+
+		const legacyWidgetKey = "todos";
+		const belowEditorWidgetKey = "todos-below";
+		const activeTodos = todos.filter((t) => !t.cancelled);
+		const total = activeTodos.length;
+
+		ctx.ui.setWidget(legacyWidgetKey, undefined);
+		ctx.ui.setStatus("base-tools-todo", undefined);
+
+		if (todos.length === 0) {
+			ctx.ui.setWidget(belowEditorWidgetKey, undefined);
+			ctx.ui.setStatus("base-tools-todo", undefined);
+			return;
 		}
+
+		ctx.ui.setWidget(belowEditorWidgetKey, (_tui, theme) => {
+			const container = new Container();
+			const borderFn = (s: string) => theme.fg("dim", s);
+
+			container.addChild(new Text("", 0, 0));
+			container.addChild(new DynamicBorder(borderFn));
+			const content = new Text("", 1, 0);
+			container.addChild(content);
+			container.addChild(new DynamicBorder(borderFn));
+
+			return {
+				render(width: number): string[] {
+					const activeNow = todos.filter((t) => !t.cancelled);
+					if (todos.length === 0) return [];
+
+					const current = activeNow.find((t) => !t.done);
+					const dots = todos.map((t) =>
+						t.cancelled
+							? theme.fg("warning", "◌")
+							: t.done
+								? theme.fg("success", "●")
+								: theme.fg("dim", "○")
+					).join("");
+					const line =
+						theme.fg("dim", " TODO ") +
+						dots +
+						(current
+							? theme.fg("dim", "  → ") + theme.fg("muted", `#${current.id} ${current.text}`)
+							: activeNow.length > 0
+								? theme.fg("dim", "  ") + theme.fg("success", "Done!")
+								: theme.fg("dim", "  ") + theme.fg("warning", "Cancelled"));
+
+					content.setText(truncateToWidth(line, Math.max(1, width - 4)));
+					return container.render(width);
+				},
+				invalidate() { container.invalidate(); },
+			};
+		}, { placement: "belowEditor" });
 	};
 
 	pi.on("session_start", async (_e, ctx) => {
@@ -256,7 +309,9 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("tool_result", async (event, ctx) => {
 		if (event.toolName === "todo") {
-			reconstructTodos(ctx);
+			// Не реконструируем тут состояние из branch: текущий toolResult может
+			// ещё не быть записан в историю, и мы откатимся к старому списку.
+			// Используем актуальное in-memory состояние, уже изменённое в execute().
 			updateWidget(ctx);
 		}
 	});
@@ -467,24 +522,25 @@ export default function (pi: ExtensionAPI) {
 	// ── 2. TODO ──────────────────────────────────────────────────────────────
 
 	const TodoParams = Type.Object({
-		action: StringEnum(["list", "add", "done", "toggle", "clear"] as const, {
-			description: "list — show all; add — create new (requires text); done — mark complete (requires id); toggle — toggle completion status (requires id); clear — remove all",
+		action: StringEnum(["list", "add", "done", "toggle", "cancel", "clear"] as const, {
+			description: "list — show all; add — create new (requires text); done — mark complete (requires id); toggle — toggle completion status (requires id); cancel — mark cancelled (requires id); clear — remove all",
 		}),
 		text: Type.Optional(Type.String({ description: 'Task text (required for action="add")' })),
-		id: Type.Optional(Type.Number({ description: 'Task ID (required for action="done" or "toggle")' })),
+		id: Type.Optional(Type.Number({ description: 'Task ID (required for action="done", "toggle" or "cancel")' })),
 	});
 
 	pi.registerTool({
 		name: "todo",
 		label: "Todo",
 		description:
-			'Manages a persistent todo list. Actions: list — show all tasks; add (text) — create new task; done (id) — mark as complete; toggle (id) — toggle completion status; clear — remove all tasks.',
+			'Manages a persistent todo list. Actions: list — show all tasks; add (text) — create new task; done (id) — mark as complete; toggle (id) — toggle completion status; cancel (id) — mark as cancelled; clear — remove all tasks.',
 		promptSnippet: "Manage a persistent todo list across the session",
 		promptGuidelines: [
 			"Use todo to track multi-step tasks and show progress to the user.",
 			"Call todo list at the start of a session to check for existing tasks.",
 			"Use todo add to break down complex requests into actionable steps.",
 			"Mark tasks as done when completed; use toggle if you need to undo a completion.",
+			"Use cancel for abandoned tasks so they are not shown as completed or successful.",
 		],
 		parameters: TodoParams,
 
@@ -493,7 +549,7 @@ export default function (pi: ExtensionAPI) {
 				case "list": {
 					const text =
 						todos.length > 0
-							? todos.map((t) => `[${t.done ? "x" : " "}] #${t.id}: ${t.text}`).join("\n")
+							? todos.map((t) => `[${t.cancelled ? "-" : t.done ? "x" : " "}] #${t.id}: ${t.text}`).join("\n")
 							: "No tasks";
 					return {
 						content: [{ type: "text" as const, text }],
@@ -503,7 +559,10 @@ export default function (pi: ExtensionAPI) {
 
 				case "add": {
 					if (!params.text) throw new Error("Parameter 'text' is required for action=add");
-					const t: Todo = { id: nextTodoId++, text: params.text, done: false };
+					while (todos.some((t) => t.id === nextTodoId)) {
+						nextTodoId++;
+					}
+					const t: Todo = { id: nextTodoId++, text: params.text, done: false, cancelled: false };
 					todos.push(t);
 					return {
 						content: [{ type: "text" as const, text: `Added #${t.id}: ${t.text}` }],
@@ -515,6 +574,7 @@ export default function (pi: ExtensionAPI) {
 					if (params.id === undefined) throw new Error("Parameter 'id' is required for action=done");
 					const todo = todos.find((t) => t.id === params.id);
 					if (!todo) throw new Error(`Task #${params.id} not found`);
+					todo.cancelled = false;
 					todo.done = true;
 					return {
 						content: [{ type: "text" as const, text: `Task #${todo.id} completed ✓` }],
@@ -526,6 +586,7 @@ export default function (pi: ExtensionAPI) {
 					if (params.id === undefined) throw new Error("Parameter 'id' is required for action=toggle");
 					const todo = todos.find((t) => t.id === params.id);
 					if (!todo) throw new Error(`Task #${params.id} not found`);
+					todo.cancelled = false;
 					todo.done = !todo.done;
 					return {
 						content: [{ type: "text" as const, text: `Task #${todo.id} ${todo.done ? "completed" : "reopened"} ✓` }],
@@ -533,13 +594,25 @@ export default function (pi: ExtensionAPI) {
 					};
 				}
 
+				case "cancel": {
+					if (params.id === undefined) throw new Error("Parameter 'id' is required for action=cancel");
+					const todo = todos.find((t) => t.id === params.id);
+					if (!todo) throw new Error(`Task #${params.id} not found`);
+					todo.done = false;
+					todo.cancelled = true;
+					return {
+						content: [{ type: "text" as const, text: `Task #${todo.id} cancelled` }],
+						details: { action: "cancel", todos: [...todos], nextId: nextTodoId } as TodoDetails,
+					};
+				}
+
 				case "clear": {
 					const count = todos.length;
 					todos = [];
-					nextTodoId = 1;
+					// Не сбрасываем nextTodoId, чтобы избежать дублирования ID
 					return {
 						content: [{ type: "text" as const, text: `Cleared ${count} tasks` }],
-						details: { action: "clear", todos: [], nextId: 1 } as TodoDetails,
+						details: { action: "clear", todos: [], nextId: nextTodoId } as TodoDetails,
 					};
 				}
 			}
@@ -567,13 +640,26 @@ export default function (pi: ExtensionAPI) {
 			switch (d.action) {
 				case "list": {
 					if (list.length === 0) return new Text(theme.fg("dim", "No tasks"), 0, 0);
-					const done = list.filter((t) => t.done).length;
-					let txt = theme.fg("muted", `${done}/${list.length} done:`);
+					const active = list.filter((t) => !t.cancelled);
+					const done = active.filter((t) => t.done).length;
+					const cancelled = list.filter((t) => t.cancelled).length;
+					let txt = theme.fg("muted", `${done}/${active.length} done`) +
+						(cancelled > 0 ? theme.fg("warning", ` · ${cancelled} cancelled`) : "") +
+						theme.fg("muted", ":");
 					const show = expanded ? list : list.slice(0, 5);
 					for (const t of show) {
-						const check = t.done ? theme.fg("success", "✓") : theme.fg("dim", "○");
-						const label = t.done ? theme.fg("dim", t.text) : theme.fg("muted", t.text);
-						txt += `\n${check} ${theme.fg("accent", `#${t.id}`)} ${label}`;
+						const check = t.cancelled
+							? theme.fg("warning", "−")
+							: t.done
+								? theme.fg("success", "✓")
+								: theme.fg("dim", "○");
+						const id = t.cancelled ? theme.fg("warning", `#${t.id}`) : theme.fg("accent", `#${t.id}`);
+						const label = t.cancelled
+							? theme.fg("warning", t.text)
+							: t.done
+								? theme.fg("dim", t.text)
+								: theme.fg("muted", t.text);
+						txt += `\n${check} ${id} ${label}`;
 					}
 					if (!expanded && list.length > 5)
 						txt += `\n${theme.fg("dim", `... ${list.length - 5} more`)}`;
@@ -602,6 +688,12 @@ export default function (pi: ExtensionAPI) {
 					const t = result.content[0];
 					const msg = t?.type === "text" ? t.text : "";
 					return new Text(theme.fg("success", "✓ ") + theme.fg("muted", msg), 0, 0);
+				}
+
+				case "cancel": {
+					const t = result.content[0];
+					const msg = t?.type === "text" ? t.text : "";
+					return new Text(theme.fg("warning", "− ") + theme.fg("muted", msg), 0, 0);
 				}
 
 				case "clear":
