@@ -29,3 +29,8 @@ pi-pi:
   - tui-expert
   - prompt-expert
   - agent-expert
+
+test-agents:
+  - math-expert
+  - file-analyzer
+  - code-reviewer

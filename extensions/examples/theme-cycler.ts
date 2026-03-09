@@ -122,6 +122,25 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	// --- Slideshow Mode ---
+	let slideshowInterval: ReturnType<typeof setInterval> | null = null;
+
+	pi.registerCommand("themes-slideshow", {
+		description: "Start/stop theme slideshow (3s interval)",
+		handler: async (_args, ctx) => {
+			if (slideshowInterval) {
+				clearInterval(slideshowInterval);
+				slideshowInterval = null;
+				ctx.ui.notify("Slideshow stopped", "info");
+			} else {
+				ctx.ui.notify("Slideshow started (3s)", "success");
+				slideshowInterval = setInterval(() => {
+					cycleTheme(ctx, 1);
+				}, 3000);
+			}
+		},
+	});
+
 	// --- Command: /theme ---
 
 	pi.registerCommand("theme", {
@@ -168,8 +187,12 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		currentCtx = ctx;
-		applyExtensionDefaults(import.meta.url, ctx);
-		updateStatus(ctx);
+		// Баг: Если вызвать setTheme сразу, TUI может еще не быть готов или перезапишет тему
+		// своим начальным значением. Добавляем небольшую задержку.
+		setTimeout(() => {
+			applyExtensionDefaults(import.meta.url, ctx);
+			updateStatus(ctx);
+		}, 100);
 	});
 
 	pi.on("session_shutdown", async () => {

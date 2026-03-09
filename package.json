@@ -4,6 +4,8 @@
   "type": "module",
   "description": "Pi Coding Agent extension playground",
   "dependencies": {
+    "@types/diff": "^7.0.2",
+    "diff": "^8.0.3",
     "yaml": "^2.8.0"
   }
 }

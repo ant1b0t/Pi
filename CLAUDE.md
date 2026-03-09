@@ -5,10 +5,13 @@ Pi Coding Agent extension examples and experiments.
 ## Tooling
 - **Package manager**: `bun` (not npm/yarn/pnpm)
 - **Task runner**: `just` (see justfile)
-- **Extensions run via**: `pi -e extensions/<name>.ts`
+- **Extensions run via**: `pi -e extensions/<name>.ts` or `pi -e extensions/<subdir>/<name>.ts`
 
 ## Project Structure
 - `extensions/` — Pi extension source files (.ts)
+  - `base/` — Core infrastructure (base-tools, base-agents)
+  - `examples/` — UI and workflow extension examples
+  - `lib/` — Shared libraries and contracts
 - `specs/` — Feature specifications
 - `docs/` — Documentation (comparisons, reference, architecture)
 - `.pi/agents/` — Agent definitions for agent-team extension

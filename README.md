@@ -71,23 +71,25 @@ bun install
 
 ## Extensions
 
-| Extension               | File                                | Description                                                                                                                                                |
-| ----------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **pure-focus**          | `extensions/pure-focus.ts`          | Removes the footer bar and status line entirely — pure distraction-free mode                                                                               |
-| **minimal**             | `extensions/minimal.ts`             | Compact footer showing model name and a 10-block context usage meter `[###-------] 30%`                                                                    |
-| **cross-agent**         | `extensions/cross-agent.ts`         | Scans `.claude/`, `.gemini/`, `.codex/` dirs for commands, skills, and agents and registers them in Pi                                                     |
-| **purpose-gate**        | `extensions/purpose-gate.ts`        | Prompts you to declare session intent on startup; shows a persistent purpose widget and blocks prompts until answered                                      |
-| **tool-counter**        | `extensions/tool-counter.ts`        | Rich two-line footer: model + context meter + token/cost stats on line 1, cwd/branch + per-tool call tally on line 2                                       |
-| **tool-counter-widget** | `extensions/tool-counter-widget.ts` | Live-updating above-editor widget showing per-tool call counts with background colors                                                                      |
-| **subagent-widget**     | `extensions/subagent-widget.ts`     | `/sub <task>` command that spawns background Pi subagents; each gets its own streaming live-progress widget                                                |
-| **tilldone**            | `extensions/tilldone.ts`            | Task discipline system — define tasks before starting work; tracks completion state across steps; shows persistent task list in footer with live progress  |
-| **agent-team**          | `extensions/agent-team.ts`          | Dispatcher-only orchestrator: the primary agent delegates all work to named specialist agents via `dispatch_agent`; shows a grid dashboard                 |
-| **system-select**       | `extensions/system-select.ts`       | `/system` command to switch agent personas/system prompts; supports profile-based tool activation via `tool_profile` in agent frontmatter |
-| **damage-control**      | `extensions/damage-control.ts`      | Real-time safety auditing — intercepts dangerous bash patterns and enforces path-based access controls from `.pi/damage-control-rules.yaml`                |
-| **agent-chain**         | `extensions/agent-chain.ts`         | Sequential pipeline orchestrator — chains multiple agents where each step's output feeds into the next step's prompt; use `/chain` to select and run       |
-| **pi-pi**               | `extensions/pi-pi.ts`               | Meta-agent that builds Pi agents using parallel research experts for documentation                                                                         |
-| **session-replay**      | `extensions/session-replay.ts`      | Scrollable timeline overlay of session history - showcasing customizable dialog UI                                                                         |
-| **theme-cycler**        | `extensions/theme-cycler.ts`        | Keyboard shortcuts (Ctrl+X/Ctrl+Q) and `/theme` command to cycle/switch between custom themes                                                              |
+| Extension               | File                                          | Description                                                                                                                                                |
+| ----------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **pure-focus**          | `extensions/examples/pure-focus.ts`          | Removes the footer bar and status line entirely — pure distraction-free mode                                                                               |
+| **minimal**             | `extensions/examples/minimal.ts`             | Compact footer showing model name and a 10-block context usage meter `[###-------] 30%`                                                                    |
+| **cross-agent**         | `extensions/examples/cross-agent.ts`         | Scans `.claude/`, `.gemini/`, `.codex/` dirs for commands, skills, and agents and registers them in Pi                                                     |
+| **purpose-gate**        | `extensions/examples/purpose-gate.ts`        | Prompts you to declare session intent on startup; shows a persistent purpose widget and blocks prompts until answered                                      |
+| **tool-counter**        | `extensions/examples/tool-counter.ts`        | Rich two-line footer: model + context meter + token/cost stats on line 1, cwd/branch + per-tool call tally on line 2                                       |
+| **tool-counter-widget** | `extensions/examples/tool-counter-widget.ts` | Live-updating above-editor widget showing per-tool call counts with background colors                                                                      |
+| **subagent-widget**     | `extensions/examples/subagent-widget.ts`     | `/sub <task>` command that spawns background Pi subagents; each gets its own streaming live-progress widget                                                |
+| **tilldone**            | `extensions/examples/tilldone.ts`            | Task discipline system — define tasks before starting work; tracks completion state across steps; shows persistent task list in footer with live progress  |
+| **agent-team**          | `extensions/examples/agent-team.ts`          | Dispatcher-only orchestrator: the primary agent delegates all work to named specialist agents via `dispatch_agent`; shows a grid dashboard                 |
+| **system-select**       | `extensions/examples/system-select.ts`       | `/system` command to switch agent personas/system prompts; supports profile-based tool activation via `tool_profile` in agent frontmatter |
+| **damage-control**      | `extensions/examples/damage-control.ts`      | Real-time safety auditing — intercepts dangerous bash patterns and enforces path-based access controls from `.pi/damage-control-rules.yaml`                |
+| **agent-chain**         | `extensions/examples/agent-chain.ts`         | Sequential pipeline orchestrator — chains multiple agents where each step's output feeds into the next step's prompt; use `/chain` to select and run       |
+| **pi-pi**               | `extensions/examples/pi-pi.ts`               | Meta-agent that builds Pi agents using parallel research experts for documentation                                                                         |
+| **session-replay**      | `extensions/examples/session-replay.ts`      | Scrollable timeline overlay of session history - showcasing customizable dialog UI                                                                         |
+| **theme-cycler**        | `extensions/examples/theme-cycler.ts`        | Keyboard shortcuts (Ctrl+X/Ctrl+Q) and `/theme` command to cycle/switch between custom themes                                                              |
+| **base-tools**          | `extensions/base/base-tools.ts`               | Core toolset: web_fetch, todo, ask_user, glob                                                                                                              |
+| **base-agents**         | `extensions/base/base-agents.ts`              | Modular sub-agent system: agent_spawn, agent_join, agent_list                                                                                              |
 
 ---
 
@@ -97,7 +99,7 @@ bun install
 ### Run a single extension
 
 ```bash
-pi -e extensions/<name>.ts
+pi -e extensions/examples/<name>.ts
 ```
 
 ### Stack multiple extensions
@@ -105,7 +107,7 @@ pi -e extensions/<name>.ts
 Extensions compose — pass multiple `-e` flags:
 
 ```bash
-pi -e extensions/minimal.ts -e extensions/cross-agent.ts
+pi -e extensions/examples/minimal.ts -e extensions/examples/cross-agent.ts
 ```
 
 ### Use `just` recipes
@@ -150,7 +152,10 @@ just open purpose-gate minimal tool-counter-widget
 
 ```
 pi-vs-cc/
-├── extensions/          # Pi extension source files (.ts) — one file per extension
+├── extensions/
+│   ├── base/            # Core infrastructure (base-tools, base-agents)
+│   ├── examples/        # Extension examples (minimal, tilldone, etc.)
+│   └── lib/             # Shared libraries and contracts
 ├── specs/               # Feature specifications for extensions
 ├── .pi/
 │   ├── agent-sessions/  # Ephemeral session files (gitignored)

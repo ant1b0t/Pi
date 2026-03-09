@@ -36,6 +36,8 @@ export const THEME_MAP: Record<string, string> = {
 	"tilldone":           "everforest",       // task-focused calm
 	"tool-counter":       "synthwave",        // techy metrics
 	"tool-counter-widget":"synthwave",        // same family
+	"base-tools":         "tokyo-night",       // extended toolset, sharp
+	"base-agents":        "synthwave",    // orchestration, parallel
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -57,6 +59,12 @@ function extensionName(fileUrl: string): string {
  */
 export function applyExtensionTheme(fileUrl: string, ctx: ExtensionContext): boolean {
 	if (!ctx.hasUI) return false;
+
+	// ЕСЛИ ПОЛЬЗОВАТЕЛЬ ВЫБРАЛ СВОЮ ТЕМУ — НЕ ТРОГАЕМ ЕЁ!
+	const currentTheme = ctx.ui.theme.name;
+	if (currentTheme !== "dark" && currentTheme !== "light") {
+		return true; // Прерываем выполнение, оставляем тему пользователя
+	}
 
 	const name = extensionName(fileUrl);
 	

@@ -1,0 +1,16 @@
+{
+  "high": [
+    "anthropic/claude-sonnet-4-6",
+    "anthropic/claude-opus-4-6-thinking",
+    "kimi/kimi-for-coding",
+    "openai/gpt-5.4",
+    "openai/gpt-5.3-codex"
+  ],
+  "medium": [
+    "google/gemini-3.1-pro-high",
+    "google/gemini-3.1-pro-preview"
+  ],
+  "low": [
+    "kimi/kimi-for-coding"
+  ]
+}
