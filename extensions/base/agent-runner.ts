@@ -7,7 +7,7 @@
  *   - Cross-platform process kill (SIGTERM/SIGKILL on Unix, taskkill on Windows)
  *   - Pi subprocess spawning — correct cross-platform approach via process.execPath
  *   - Tool list resolution from tags or explicit list
- *   - Extension file resolution (base-tools + base-agents)
+ *   - Extension file resolution (capability-guard + base-tools + base-agents)
  *   - Output format helper
  *
  * No Pi API dependency — import from any agent extension.
@@ -25,7 +25,7 @@
 
 import type { ChildProcess } from "node:child_process";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -34,42 +34,6 @@ import {
 	toolsNeedBaseAgents,
 	toolsNeedBaseTools,
 } from "./agent-tags.ts";
-
-// ── Helpers ────────────────────────────────────────────────────────────
-
-/**
- * Basic .env parser. Loads KEY=VALUE pairs from a file.
- * Silently skips missing files or malformed lines.
- */
-function loadDotEnv(cwd: string): Record<string, string> {
-	const env: Record<string, string> = {};
-	const filePath = path.resolve(cwd, ".env");
-	if (!existsSync(filePath)) return env;
-
-	try {
-		const content = readFileSync(filePath, "utf-8");
-		for (const line of content.split("\n")) {
-			const trimmed = line.trim();
-			if (!trimmed || trimmed.startsWith("#")) continue;
-			const idx = trimmed.indexOf("=");
-			if (idx > 0) {
-				const key = trimmed.slice(0, idx).trim();
-				let val = trimmed.slice(idx + 1).trim();
-				// Remove optional quotes
-				if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-					val = val.slice(1, -1);
-				}
-				if (key) {
-					env[key] = val;
-					// Standardize Google/Gemini keys
-					if (key === "GEMINI_API_KEY" && !env["GOOGLE_API_KEY"]) env["GOOGLE_API_KEY"] = val;
-					if (key === "GOOGLE_API_KEY" && !env["GEMINI_API_KEY"]) env["GEMINI_API_KEY"] = val;
-				}
-			}
-		}
-	} catch {}
-	return env;
-}
 
 // ── Constants ──────────────────────────────────────────────────────────
 
@@ -110,21 +74,10 @@ export function canonicalizeToolList(toolList: string[]): string[] {
  * Defaults to "Bash" tag (base read-only tools + bash).
  */
 export function resolveToolsParam(tags?: string | string[]): string[] {
-	if (!tags) {
-		return canonicalizeToolList(resolveTagsToTools("Bash"));
+	if (tags) {
+		const strTags = Array.isArray(tags) ? tags.join(",") : tags;
+		if (strTags.trim()) return canonicalizeToolList(resolveTagsToTools(strTags));
 	}
-
-	if (Array.isArray(tags)) {
-		// Explicit array of tools: use as-is (with cleanup/sorting)
-		return canonicalizeToolList(tags);
-	}
-
-	const strTags = tags.trim();
-	if (strTags) {
-		// String: parse as comma-separated tags
-		return canonicalizeToolList(resolveTagsToTools(strTags));
-	}
-
 	return canonicalizeToolList(resolveTagsToTools("Bash"));
 }
 
@@ -174,9 +127,7 @@ export function makeSessionFile(id: number, cwd: string, subdir = "subagents"): 
 export function cleanSessionDir(dir: string): void {
 	if (!existsSync(dir)) return;
 	for (const file of readdirSync(dir)) {
-		if (file.endsWith(".jsonl")) {
-			try { unlinkSync(path.join(dir, file)); } catch {}
-		}
+		try { unlinkSync(path.join(dir, file)); } catch {}
 	}
 }
 
@@ -229,9 +180,9 @@ export function scheduleForceKill(proc: ChildProcess): void {
 
 /**
  * Resolve which Pi extension files to load for a given tool list.
- * Always adds capability-guard.ts for sub-agent tool restriction.
- * Adds base-tools.ts if toolList contains base-tools extension tools.
- * Adds base-agents.ts if toolList contains agent orchestration tools.
+ * Always includes capability-guard.ts.
+ * Adds base-tools.ts if toolList contains web_fetch / glob / task.
+ * Adds base-agents.ts if toolList contains agent_spawn/join/continue/list.
  *
  * Paths are resolved relative to the calling extension file.
  *
@@ -267,8 +218,6 @@ export interface SpawnPiOptions {
 	cwd: string;
 	/** Pass true to add -c (continue existing session history). */
 	isContinuation?: boolean;
-	/** Optional extra system prompt appended for the sub-agent. */
-	appendSystemPrompt?: string;
 	/** Extra env vars merged into the subprocess environment. */
 	extraEnv?: Record<string, string>;
 }
@@ -289,15 +238,6 @@ export function spawnPiProcess(opts: SpawnPiOptions): ChildProcess {
 	const builtin = getBuiltinTools(opts.toolList);
 	const toolsArg = builtin.length > 0 ? builtin.join(",") : "read,grep,find,ls";
 
-	// Merge current process environment with .env file and explicit extraEnv
-	const dotEnv = loadDotEnv(opts.cwd);
-	const mergedEnv = {
-		...process.env,
-		...dotEnv,
-		PI_CLI_PATH: piCli,
-		...opts.extraEnv,
-	};
-
 	const args = [
 		piCli,
 		"--mode", "json",
@@ -309,13 +249,16 @@ export function spawnPiProcess(opts: SpawnPiOptions): ChildProcess {
 		"--thinking", "off",
 	];
 	if (opts.model) args.push("--model", opts.model);
-	if (opts.appendSystemPrompt?.trim()) args.push("--append-system-prompt", opts.appendSystemPrompt);
 	args.push(opts.task);
 
 	return spawn(process.execPath, args, {
 		cwd: opts.cwd,
 		stdio: ["ignore", "pipe", "pipe"],
-		env: mergedEnv,
+		env: {
+			...process.env,
+			PI_CLI_PATH: piCli,
+			...opts.extraEnv,
+		},
 		shell: false,
 	});
 }

@@ -43,7 +43,7 @@ export function loadModelTiers(cwd: string): ModelTiers | null {
 		const raw = readFileSync(filePath, "utf-8");
 		const parsed = JSON.parse(raw);
 
-		const isValidTier = (val: any) => typeof val === "string" || (Array.isArray(val) && val.every(v => typeof v === "string"));
+		const isValidTier = (val: any) => typeof val === "string" || (Array.isArray(val) && val.length > 0 && val.every(v => typeof v === "string" && v.trim().length > 0));
 
 		if (isValidTier(parsed.high) && isValidTier(parsed.medium) && isValidTier(parsed.low)) {
 			return { high: parsed.high, medium: parsed.medium, low: parsed.low };
@@ -80,6 +80,7 @@ export function resolveModel(options: {
 	if (tier && tiers) {
 		const selected = tiers[tier];
 		if (Array.isArray(selected)) {
+			if (selected.length === 0) return fallback;
 			const index = tierCounters[tier];
 			tierCounters[tier] = (tierCounters[tier] + 1) % selected.length;
 			return selected[index];
@@ -103,6 +104,10 @@ export function reverseLookupTier(model: string, tiers: ModelTiers | null): Mode
 	return undefined;
 }
 
+/**
+ * Returns a human-readable label for a model string, for use in UI/logs.
+ * e.g. "anthropic/claude-haiku-3-5" → "claude-haiku-3-5"
+ */
 /**
  * Extract a stable model string from Pi's current model object.
  * Tries common fields in order and avoids producing broken values like "provider/".

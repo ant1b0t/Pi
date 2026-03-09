@@ -11,29 +11,24 @@ const BUILTIN_TOOL_NAMES = ["read", "write", "edit", "bash", "grep", "find", "ls
 /** Base tools always available to every agent (read-only codebase access). */
 export const BASE_TOOLS = ["read", "grep", "find", "ls", "glob"];
 
-/**
- * Tag -> additional tools mapping.
- *
- * IMPORTANT: Keep this file in sync with extensions/base/base-tools.ts.
- */
+/** Tag -> additional tools mapping. Tags are additive. */
 export const TAG_TOOLS: Record<string, string[]> = {
-	Wr: ["edit", "write", "apply_patch"],
-	FS: ["edit", "write", "apply_patch"],
-	Web: ["web_fetch"],
-	Bash: ["bash", "script_run"],
-	Agents: ["agent_spawn", "agent_join", "agent_continue", "agent_list", "agent_wait_any", "agent_wait_all"],
-	Task: ["task"],
-	UI: ["ask_user", "todo"],
+	Wr:     ["edit", "write", "apply_patch"],
+	Web:    ["web_fetch"],
+	Bash:   ["bash", "script_run"],
+	Agents: ["agent_spawn", "agent_join", "agent_continue", "agent_list"],
+	Task:   ["task"],
+	UI:     ["ask_user", "todo"],
 };
 
 /**
  * Resolves comma-separated tags to full tool list (BASE_TOOLS + tag tools).
  *
  * Tags:
- *   FS/Wr  — edit, write, apply_patch
+ *   Wr     — edit, write, apply_patch
  *   Web    — web_fetch
  *   Bash   — bash, script_run
- *   Agents — agent_spawn, agent_join, agent_continue, agent_list, agent_wait_any, agent_wait_all
+ *   Agents — agent_spawn, agent_join, agent_continue, agent_list
  *   Task   — task (disposable one-shot sub-agent)
  *   UI     — ask_user, todo (only useful in orchestrator with hasUI)
  *
@@ -45,7 +40,7 @@ export function resolveTagsToTools(tags: string): string[] {
 	for (const tag of tags.split(",").map((t) => t.trim()).filter(Boolean)) {
 		for (const t of TAG_TOOLS[tag] || []) set.add(t);
 	}
-	return [...set].sort();
+	return [...set];
 }
 
 /**
@@ -63,10 +58,10 @@ export function toolsNeedBaseTools(toolNames: string[]): boolean {
  * Returns true if any tool in the list comes from base-agents extension.
  *
  * @param toolNames - Array of tool names to check
- * @returns True if any agent_spawn/join/continue/list/wait tool is in the list
+ * @returns True if any agent_spawn/join/continue/list is in the list
  */
 export function toolsNeedBaseAgents(toolNames: string[]): boolean {
-	const ext = ["agent_spawn", "agent_join", "agent_continue", "agent_list", "agent_wait_any", "agent_wait_all"];
+	const ext = ["agent_spawn", "agent_join", "agent_continue", "agent_list"];
 	return toolNames.some((t) => ext.includes(t));
 }
 

@@ -38,7 +38,6 @@ import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { resolveTagsToTools } from "./agent-tags.ts";
-import { parseAgentFile, scanAgentDirs, type AgentDef } from "./agent-defs.ts";
 import {
 	parseAgentEvent,
 	parseSessionFile,
@@ -65,7 +64,6 @@ import {
 	scheduleForceKill,
 	spawnPiProcess,
 } from "./agent-runner.ts";
-import { applyExtensionDefaults } from "./themeMap.ts";
 import {
 	loadModelTiers,
 	resolveModel,
@@ -82,7 +80,6 @@ interface SubAgentState {
 	id: number;
 	name: string;
 	status: "running" | "done" | "error";
-	/** Whether the final result was already retrieved via agent_join. */
 	resultJoined: boolean;
 	task: string;
 	// lastAssistantText: text from the most recent assistant message (final answer)
@@ -113,10 +110,6 @@ interface SubAgentState {
 	currentStreamText: string;
 	/** How to notify the main agent on completion. Default: "ui". */
 	notifyMode?: "off" | "ui" | "turn";
-	/** Optional appended system prompt for role-based sub-agents. */
-	systemPrompt?: string;
-	/** Optional source agent definition file path. */
-	agentFile?: string;
 	/** Timestamp of the latest visible activity for auto-focus in compact UI. */
 	lastActivityAt: number;
 }
@@ -137,11 +130,8 @@ const NotifyEnum = Type.String({
 
 const AgentSpawnParams = Type.Object({
 	task: Type.String({ description: "Task description" }),
-	name: Type.Optional(Type.String({ description: "Display name for the sub-agent (defaults to agent definition name or agent-<id>)" })),
-	agent: Type.Optional(Type.String({ description: "Agent definition name from agents/, .claude/agents/, or .pi/agents/ (e.g. scout, builder, reviewer)" })),
-	agentFile: Type.Optional(Type.String({ description: "Path to an agent definition markdown file. If provided, its system prompt and tools are loaded." })),
-	systemPrompt: Type.Optional(Type.String({ description: "Extra system prompt for the sub-agent. Appended after any loaded agent definition prompt." })),
-	tags: Type.Optional(Type.String({ description: "Capability tags as comma-separated string: Wr,Web,Bash,Agents,UI. Ignored for tools if agent/agentFile defines tools unless tags are explicitly provided as an override. (read, glob, grep, ls, find are ALWAYS included)" })),
+	name: Type.Optional(Type.String({ description: "Name (e.g. researcher)" })),
+	tags: Type.Optional(Type.String({ description: "Capability tags as comma-separated string: Wr,Web,Bash,Agents,Task. (read, glob, grep, ls, find are ALWAYS included)" })),
 	format: Type.Optional(FormatEnum),
 	tier: Type.Optional(TierEnum),
 	model: Type.Optional(Type.String({ description: "Explicit model string (overrides tier)" })),
@@ -157,8 +147,7 @@ const AgentJoinParams = Type.Object({
 const AgentContinueParams = Type.Object({
 	id: Type.Number({ description: "Agent ID" }),
 	prompt: Type.String({ description: "New instructions" }),
-	tags: Type.Optional(Type.String({ description: "Capability tags as comma-separated string: Wr,Web,Bash,Agents,UI. (read, glob, grep, ls, find are ALWAYS included)" })),
-	systemPrompt: Type.Optional(Type.String({ description: "Optional extra system prompt to append for future turns." })),
+	tags: Type.Optional(Type.String({ description: "Capability tags as comma-separated string: Wr,Web,Bash,Agents,Task. (read, glob, grep, ls, find are ALWAYS included)" })),
 	format: Type.Optional(FormatEnum),
 	tier: Type.Optional(TierEnum),
 	model: Type.Optional(Type.String({ description: "Explicit model string (overrides tier)" })),
@@ -179,40 +168,35 @@ const AgentListParams = Type.Object({});
 // See: RISEN framework, Ralph exit gates, declare_task_succeeded patterns.
 
 const ORCHESTRATOR_GUIDANCE = `
-## Sub-agent tools available to you
-- Use agent_spawn to launch a background sub-agent. It returns an ID immediately.
-- Use agent_join to wait for a specific sub-agent result.
-- Use agent_continue to resume an existing sub-agent session with more instructions.
-- Use agent_list to inspect current agent status.
-- Use agent_wait_any / agent_wait_all to block on parallel work.
-- CLI helpers: /agents, /aenter <id>, /akill <id>, /acont <id> <prompt>, /aclear
-
-## Exact delegation rules
-- When you decide to delegate, call the actual tool agent_spawn. Do not merely describe spawning conceptually.
-- When you need an agent definition from .pi/agents, pass agent or agentFile to agent_spawn.
-- When you need the result, call the actual tool agent_join or a wait tool.
-- If a task has multiple independent parts, spawn multiple agents in parallel, then use agent_wait_all and/or agent_join.
+## Agents
+spawn: async, parallel task → ID (immediate)
+join: wait for agent → output (timeout 15min, Escape cancel)
+continue: resume session (history preserved, turn+1)
+list: all agents + status
+agent_wait_any / agent_wait_all: block until sub-agents finish (ids optional)
+CLI: /agents, /aenter <id>, /akill <id>, /acont <id> <prompt>, /aclear
 
 ## Model tiers
-- high: STRICTLY for architecture design, complex planning, and deep algorithmic debugging. DO NOT use for code exploration or web research.
-- medium: default for exploring codebases, web research, writing tests, and standard implementation.
-- low: simple extraction, formatting, proofreading, and lightweight analysis.
-- Omit tier to inherit the parent model.
+high: STRICTLY for architecture design, complex planning, and deep algorithmic debugging. DO NOT use for code exploration or web research.
+medium: (Default) Use for exploring codebases, web research, writing tests, and standard feature implementation.
+low: Use for simple text extraction, formatting, fixing typos, and linting.
+When spawning agents, pick tier by task complexity. Omit for parent model.
 
-## Orchestration best practices
-- Delegation is mandatory for heavy parallelizable work.
-- Keep tasks focused: one agent, one clear objective.
-- Keep your own context clean; use sub-agents for bulky exploration.
-- Do not rely on notifications to continue work; explicitly call agent_join / agent_wait_*.
-- Do not leave finished agents unjoined if their work matters to the answer. After agent_wait_any / agent_wait_all, explicitly join every completed agent you intend to rely on.
-- For long outputs, prefer agent_join with artifact:true.
-- After compaction or uncertainty, call agent_list first.
-- If agent_join reports no final output, do not hallucinate results.
+## Orchestration (Best Practices)
+- **Delegation is Mandatory:** You are the Lead Architect. Do not do manual labor if a task requires reading multiple files, deep code exploration, web research, or affects multiple components. Spawn sub-agents for these tasks.
+- **Parallelism:** If a task has independent parts (e.g., testing 3 different files, researching 2 libraries), spawn multiple sub-agents simultaneously, then use agent_wait_all.
+- **Context Isolation:** If you need to debug a deep issue or read heavy documentation, send a sub-agent. Keep your own context clean for communicating with the USER.
+- **Do not rely on notifications** to continue work. They are for your information only.
+- **Use agent_join** when you need a result. It now returns diagnostic info if no text summary exists.
+- **Do not leave finished agents unjoined** if their work matters to the answer. After agent_wait_any / agent_wait_all, explicitly join every completed agent you intend to rely on.
+- For very long outputs, prefer agent_join with artifact:true to save the full result to a file and keep chat context small.
+- **Use wait_any / wait_all** for efficient parallel orchestration before joining.
+- After compaction or if you are unsure which agents are still active, call agent_list first to restore agent state.
+- If agent_join reports no final output (e.g. tool-only or error), do not hallucinate results.
 
-## Final delivery rules
-- Deliver one final synthesis to the user.
-- Produce only what the user requested.
-- Do not create artifacts unless asked.
+## Orchestrator Rules
+- Deliver ONE final synthesis to the user. Do not create artifacts unless asked.
+- Narrowing: Produce only what was requested. No supplemental summaries or indices.
 `.trim();
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -546,25 +530,6 @@ export default function baseAgents(pi: ExtensionAPI) {
 		return file;
 	}
 
-	function findAgentDef(cwd: string, selector?: string, agentFile?: string): AgentDef | null {
-		if (agentFile?.trim()) {
-			const fullPath = path.isAbsolute(agentFile) ? agentFile : path.resolve(cwd, agentFile);
-			return parseAgentFile(fullPath);
-		}
-		if (!selector?.trim()) return null;
-		const wanted = selector.trim().toLowerCase();
-		return scanAgentDirs(cwd).find((def) => {
-			const byName = def.name.toLowerCase() === wanted;
-			const byFile = path.basename(def.file, path.extname(def.file)).toLowerCase() === wanted;
-			return byName || byFile;
-		}) ?? null;
-	}
-
-	function combineSystemPrompts(...parts: Array<string | undefined>): string | undefined {
-		const combined = parts.map((part) => part?.trim()).filter(Boolean).join("\n\n");
-		return combined || undefined;
-	}
-
 	// Single shared timer — all agents updated simultaneously.
 	// CRITICAL: per-agent timers each called setWidget at different times, causing
 	// Pi to reorder widgets (visual "jumping"). One timer = all updated atomically.
@@ -628,6 +593,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 		for (const state of agents.values()) {
 			if (state.proc && state.status === "running") {
 				killProcess(state.proc);
+				scheduleForceKill(state.proc);
 			}
 		}
 	}
@@ -636,6 +602,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 		if (!state.proc || state.status !== "running") return false;
 		state.killed = true;
 		killProcess(state.proc);
+		scheduleForceKill(state.proc);
 		return true;
 	}
 
@@ -674,7 +641,6 @@ export default function baseAgents(pi: ExtensionAPI) {
 			model,
 			cwd,
 			isContinuation: state.turnCount > 1,
-			appendSystemPrompt: state.systemPrompt,
 			extraEnv: { PI_AGENT_ALLOWED_TOOLS: toolList.join(",") }
 		});
 
@@ -718,7 +684,14 @@ export default function baseAgents(pi: ExtensionAPI) {
 		proc.stderr!.on("data", (chunk: string) => {
 			if (state.runSeq !== currentRunSeq) return;
 			// Store last few lines of stderr (useful for diagnosing errors)
-			const lines = chunk.split("\n").filter(l => l.trim());
+			// Filter out known UV_HANDLE_CLOSING noise on Windows (doesn't affect functionality)
+			const isUvClosingNoise = (line: string) => 
+				line.includes("UV_HANDLE_CLOSING") || 
+				line.includes("src\\win\\async.c") || 
+				line.includes("src/win/async.c");
+			
+			const lines = chunk.split("\n")
+				.filter(l => l.trim() && !isUvClosingNoise(l));
 			for (const line of lines) {
 				state.lastActivityAt = Date.now();
 				state.stderrLines.push(line);
@@ -742,6 +715,14 @@ export default function baseAgents(pi: ExtensionAPI) {
 			}
 
 			state.status = (!state.killed && code === 0) ? "done" : "error";
+			
+			// Windows fix: Close stdout/stderr to prevent UV_HANDLE_CLOSING assertion
+			// This occurs when Node.js tries to close handles already terminated by taskkill
+			if (process.platform === "win32") {
+				try { proc.stdout?.destroy(); } catch {}
+				try { proc.stderr?.destroy(); } catch {}
+			}
+			
 			state.lastActivityAt = Date.now();
 			state.proc = undefined;
 			updateAllWidgets();
@@ -900,27 +881,19 @@ export default function baseAgents(pi: ExtensionAPI) {
 	if (isAllowed("agent_spawn")) pi.registerTool({
 		name: "agent_spawn",
 		label: "Spawn Agent",
-		description: "Spawn a background sub-agent. Returns ID immediately. Required: task. Optional: agent/agentFile (load role prompt + tools from .md), name override, systemPrompt append, tier, tags override, model, notify, format. (Sub-agents ALWAYS include read, glob, grep, find, ls).",
+		description: "Spawn a background sub-agent. Returns ID immediately. Required: task. Optional: name, tier (high/medium/low), tags, model, notify, format. (Sub-agents ALWAYS have read, glob, grep, find, ls).",
 		parameters: AgentSpawnParams,
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			activeCtx = ctx;
 			const cwd = ctx.cwd || process.cwd();
 			const id = nextAgentId();
-			const agentDef = findAgentDef(cwd, params.agent, params.agentFile);
-			const explicitTags = params.tags?.trim();
-			const toolList = explicitTags
-				? resolveToolsParam(explicitTags)
-				: agentDef?.tools
-					? canonicalizeToolList(agentDef.tools.split(",").map((t) => t.trim()).filter(Boolean))
-					: resolveToolsParam(undefined);
+			const toolList = resolveToolsParam(params.tags);
 			const parentModel = currentModelString(ctx.model);
 			const model = resolveModel({ model: params.model, tier: params.tier, tiers: modelTiers, fallback: parentModel });
 			const resolvedTier = params.tier ?? reverseLookupTier(model ?? "", modelTiers);
-			const rolePrompt = agentDef?.systemPrompt;
-			const mergedSystemPrompt = combineSystemPrompts(rolePrompt, params.systemPrompt);
 			const state: SubAgentState = {
 				id,
-				name: params.name || agentDef?.name || `agent-${id}`,
+				name: params.name || `agent-${id}`,
 				status: "running",
 				resultJoined: false,
 				task: params.task,
@@ -936,13 +909,11 @@ export default function baseAgents(pi: ExtensionAPI) {
 				timedOut: false,
 				stderrLines: [],
 				tools: toolList.join(","),
-				tags: explicitTags || (agentDef ? "agent-def" : undefined),
+				tags: params.tags,
 				model,
 				tier: resolvedTier,
 				runSeq: 1,
 				notifyMode: params.notify || "ui",
-				systemPrompt: mergedSystemPrompt,
-				agentFile: agentDef?.file,
 				lastActivityAt: Date.now(),
 			};
 			agents.set(id, state);
@@ -950,11 +921,9 @@ export default function baseAgents(pi: ExtensionAPI) {
 			runAgent(state, toolList, model);
 			updateAllWidgets();
 
-			const tagLabel = explicitTags || (agentDef ? "agent-def" : undefined);
-			const metaParts = formatAgentMetaBracketed({ tier: resolvedTier, model, tags: tagLabel });
-			const roleInfo = agentDef ? ` role=${agentDef.name}` : "";
-			const output = `Agent #${id} [${state.name}]${metaParts ? ` ${metaParts}` : ""} spawned.${roleInfo} Use agent_join(${id}) for result.`;
-			return { content: [{ type: "text", text: output }], details: { format: params.format, role: agentDef?.name, agentFile: agentDef?.file, systemPromptInjected: Boolean(mergedSystemPrompt) } };
+			const metaParts = formatAgentMetaBracketed({ tier: resolvedTier, model, tags: params.tags });
+			const output = `Agent #${id} [${state.name}]${metaParts ? ` ${metaParts}` : ""} spawned. Use agent_join(${id}) for result.`;
+			return { content: [{ type: "text", text: output }], details: { format: params.format } };
 		},
 	});
 
@@ -1136,9 +1105,6 @@ export default function baseAgents(pi: ExtensionAPI) {
 				: state.tools.split(",").map((t) => t.trim()).filter(Boolean);
 			state.tools = toolList.join(",");
 			state.tags = params.tags ?? state.tags;
-			if (params.systemPrompt?.trim()) {
-				state.systemPrompt = combineSystemPrompts(state.systemPrompt, params.systemPrompt);
-			}
 
 			// Resolve model: explicit param > tier param > previously set model > parent model
 			const parentModel = currentModelString(ctx.model);
@@ -1488,11 +1454,11 @@ export default function baseAgents(pi: ExtensionAPI) {
 		// Clean up any leftover agents from a previous session
 		for (const [id, state] of agents) {
 			if (state.proc) killProcess(state.proc);
+			if (state.proc) scheduleForceKill(state.proc);
 			ctx.ui.setWidget(`agent-${id}`, undefined);
 		}
 		agents.clear();
 		stopTimer();
-		applyExtensionDefaults(import.meta.url, ctx);
 		ctx.ui.notify("BaseAgents (Orchestration) Loaded", "info");
 	});
 

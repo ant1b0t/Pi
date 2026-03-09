@@ -11,8 +11,9 @@
  * Header: User-Agent: KimiCLI/0.77
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
+import { homedir } from "node:os";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
   createAssistantMessageEventStream,
@@ -82,8 +83,53 @@ const CAPABILITY_MATRIX: Record<string, ProviderCapabilities> = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Env helpers
+// Auth / Env helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+function getPiAgentDir(): string {
+  return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+}
+
+function getKimiAuthPath(): string {
+  return join(getPiAgentDir(), "kimi-auth.json");
+}
+
+interface KimiAuth {
+  apiKey: string;
+  savedAt: number;
+}
+
+function loadKimiAuth(): KimiAuth | undefined {
+  try {
+    const authPath = getKimiAuthPath();
+    if (!existsSync(authPath)) return undefined;
+    const data = JSON.parse(readFileSync(authPath, "utf8")) as KimiAuth;
+    return data?.apiKey ? data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function saveKimiAuth(apiKey: string): void {
+  const agentDir = getPiAgentDir();
+  if (!existsSync(agentDir)) {
+    mkdirSync(agentDir, { recursive: true });
+  }
+  const authPath = getKimiAuthPath();
+  const auth: KimiAuth = { apiKey: apiKey.trim(), savedAt: Date.now() };
+  writeFileSync(authPath, JSON.stringify(auth, null, 2));
+}
+
+function clearKimiAuth(): void {
+  try {
+    const authPath = getKimiAuthPath();
+    if (existsSync(authPath)) {
+      writeFileSync(authPath, JSON.stringify({}, null, 2));
+    }
+  } catch {
+    // ignore
+  }
+}
 
 function readDotEnvValue(name: string): string | undefined {
   try {
@@ -110,7 +156,16 @@ function readDotEnvValue(name: string): string | undefined {
 }
 
 function resolveEnv(name: string): string | undefined {
-  return process.env[name]?.trim() || readDotEnvValue(name);
+  // Priority: 1) Env var, 2) Saved auth, 3) .env file
+  const envValue = process.env[name]?.trim();
+  if (envValue) return envValue;
+
+  if (name === "KIMI_API_KEY") {
+    const saved = loadKimiAuth();
+    if (saved?.apiKey) return saved.apiKey;
+  }
+
+  return readDotEnvValue(name);
 }
 
 function normalizeBaseUrl(url: string): string {
@@ -325,9 +380,11 @@ function streamKimiForCoding(
       const apiKey = options?.apiKey && options.apiKey !== "KIMI_API_KEY" ? options.apiKey : resolveEnv("KIMI_API_KEY");
       if (!apiKey) throw new Error("Missing KIMI_API_KEY");
 
+      // Handle both "kimi-for-coding" and "kimi/kimi-for-coding" (tier alias)
+      const isKimiModel = model.id === "kimi-for-coding" || model.id === "kimi/kimi-for-coding";
       const modelWithBaseUrl = {
         ...model,
-        id: model.id === "kimi-for-coding" ? "k2p5" : model.id,
+        id: isKimiModel ? "k2p5" : model.id,
         baseUrl: normalizeBaseUrl(resolveEnv("KIMI_BASE_URL") || DEFAULT_KIMI_BASE_URL),
       } as Model<"anthropic-messages">;
 
@@ -395,6 +452,19 @@ export default function (pi: ExtensionAPI) {
       {
         id: "kimi-for-coding",
         name: "Kimi For Coding",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 262144,
+        maxTokens: 32768,
+        compat: {
+          supportsDeveloperRole: false,
+          requiresToolResultName: true,
+        },
+      },
+      {
+        id: "kimi/kimi-for-coding",
+        name: "Kimi For Coding (alias)",
         reasoning: true,
         input: ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -592,4 +662,87 @@ export default function (pi: ExtensionAPI) {
 
   // expose guard helper usage path so it doesn't get tree-shaken as dead code
   void getRemoteFileContent;
+
+  // ── Register Login Command ────────────────────────────────────────────────
+  pi.registerCommand("kimi-login", {
+    description: "Authenticate with Kimi For Coding API key",
+    handler: async (_args, ctx) => {
+      // Check if UI is available
+      if (!ctx.hasUI) {
+        ctx.ui?.notify("Interactive login requires UI. Set KIMI_API_KEY env var instead.", "error");
+        return;
+      }
+
+      const result = await ctx.ui.input(
+        "Enter your Kimi API key (from https://www.kimi.com/code/console):"
+      );
+
+      if (result === null || result === undefined) {
+        ctx.ui.notify("Login cancelled", "info");
+        return;
+      }
+
+      const apiKey = String(result).trim();
+      if (!apiKey) {
+        ctx.ui.notify("API key cannot be empty", "error");
+        return;
+      }
+
+      if (!apiKey.startsWith("sk-kimi-")) {
+        ctx.ui.notify("Warning: Key doesn't start with 'sk-kimi-'. Make sure it's a valid Kimi API key.", "warning");
+      }
+
+      try {
+        saveKimiAuth(apiKey);
+        ctx.ui.notify("Kimi API key saved successfully!", "success");
+      } catch (err) {
+        ctx.ui.notify(`Failed to save API key: ${err instanceof Error ? err.message : String(err)}`, "error");
+      }
+    },
+  });
+
+  // ── Register Logout Command ───────────────────────────────────────────────
+  pi.registerCommand("kimi-logout", {
+    description: "Remove saved Kimi For Coding API key",
+    handler: async (_args, ctx) => {
+      const saved = loadKimiAuth();
+      if (!saved?.apiKey) {
+        ctx.ui.notify("No saved Kimi API key found", "info");
+        return;
+      }
+
+      clearKimiAuth();
+      ctx.ui.notify("Kimi API key removed", "success");
+    },
+  });
+
+  // ── Register Status Command ───────────────────────────────────────────────
+  pi.registerCommand("kimi-status", {
+    description: "Check Kimi For Coding authentication status",
+    handler: async (_args, ctx) => {
+      const envKey = process.env["KIMI_API_KEY"]?.trim();
+      const saved = loadKimiAuth();
+      const dotenv = readDotEnvValue("KIMI_API_KEY");
+
+      const sources: string[] = [];
+      if (envKey) sources.push("environment variable");
+      if (saved?.apiKey) sources.push(`saved key (${new Date(saved.savedAt).toLocaleDateString()})`);
+      if (dotenv) sources.push(".env file");
+
+      if (sources.length === 0) {
+        ctx.ui.notify(
+          "Kimi For Coding: Not authenticated.\nUse /kimi-login to set API key.",
+          "warning"
+        );
+      } else {
+        ctx.ui.notify(
+          `Kimi For Coding: Authenticated.\nKey source: ${sources.join(" → ")}\n\nPriority: env → saved → .env`,
+          "success"
+        );
+      }
+    },
+  });
+
+  console.log("[Kimi For Coding] Provider registered");
+  console.log("[Kimi For Coding] Commands: /kimi-login, /kimi-logout, /kimi-status, /kimi-files, /kimi-cleanup");
 }

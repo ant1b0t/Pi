@@ -2,6 +2,7 @@
  * capability-guard.ts - Tool restriction for sub-agents by capability tags
  *
  * Core function: Blocks tool calls not in PI_AGENT_ALLOWED_TOOLS env
+ * Key dependencies: Reads env, tool_call event, before_agent_start
  * Usage: Loaded in sub-agents; main agent has no restrictions when env unset
  */
 
@@ -26,7 +27,7 @@ function isValidToolName(name: string): boolean {
 export default function capabilityGuard(pi: ExtensionAPI) {
 	let allowedTools = new Set<string>();
 
-	pi.on("session_start", async () => {
+	pi.on("session_start", async (_event, _ctx) => {
 		const raw = process.env[ENV_KEY];
 		if (raw && raw.trim()) {
 			const parsed = raw.split(",").map((t) => t.trim()).filter(Boolean);
@@ -44,7 +45,7 @@ export default function capabilityGuard(pi: ExtensionAPI) {
 			ctx.abort();
 			return {
 				block: true,
-				reason: `Tool "${event.toolName}" is not available in this sub-agent. Available: ${list}. Do not retry this blocked tool.`,
+				reason: `Tool "${event.toolName}" is not available in this agent. Available: ${list}. Do not retry.`,
 			};
 		}
 		return { block: false };
@@ -57,25 +58,24 @@ export default function capabilityGuard(pi: ExtensionAPI) {
 		const hasBash = allowedTools.has("bash");
 		const lines: string[] = [
 			"## Capability restriction",
-			`You have access only to these tools: ${sortedTools.join(", ")}. Do not attempt to call any other tools.`,
-			"",
-			"## Operational hints",
-			"- Bundle independent lookups into one response when possible.",
-			"- If a needed tool is unavailable, do not retry it; adapt your plan to the available tools.",
+			`You have access only to: ${sortedTools.join(", ")}. Do not attempt to use other tools.`,
 		];
 
+		lines.push("");
+		lines.push("## Operational hints");
+		lines.push("- If you already know you need multiple files or search results, request all of them in a single response (bundle independent lookups).");
 		if (hasBash) {
-			lines.push("- For repetitive mechanical work, prefer bash over many tiny manual edits.");
+			lines.push("- For repetitive mechanical changes (bulk rename, mass replace, log filtering) use bash/python instead of individual edit calls. Check diff/tests after.");
 		}
+		lines.push("- When the next step depends on the current result, proceed sequentially — do not batch blindly.");
 
-		lines.push(
-			"",
-			"## Sub-agent delivery protocol",
-			"Before finishing, send a concise final answer back to the orchestrator:",
-			"- TL;DR: one-sentence outcome.",
-			"- Payload: exact findings, paths, snippets, or results.",
-			"- Do not narrate tool usage or say which files you read unless that is itself the requested output.",
-		);
+		lines.push("");
+		lines.push("## Sub-agent Protocol (Final Delivery)");
+		lines.push("Before completing your task, you MUST write a final message to the Orchestrator.");
+		lines.push("- **TL;DR:** One sentence outcome.");
+		lines.push("- **Payload:** The exact code snippets, paths, or data found.");
+		lines.push("- **No Yapping:** NEVER list the tools you used or files you read. Do not say \"I used grep to...\". Just give the raw answer.");
+		lines.push("");
 
 		return {
 			systemPrompt: event.systemPrompt + "\n\n" + lines.join("\n"),

@@ -9,7 +9,6 @@
  *   name: my-agent
  *   description: A short description of what it does
  *   tools: read,grep,bash
- *   tool_profile: builder
  *   ---
  *   System prompt goes here...
  */
@@ -23,33 +22,6 @@ export interface AgentDef {
 	tools: string;
 	systemPrompt: string;
 	file: string;
-}
-
-const TOOL_PROFILES: Record<string, string[]> = {
-	core: ["read", "write", "edit", "bash"],
-	exploration: ["grep", "find", "ls"],
-	web: ["web_fetch", "ask_user"],
-	planning: ["todo"],
-	read_only: ["read", "grep", "find", "ls", "glob"],
-	review: ["read", "bash", "grep", "find", "ls", "glob"],
-	authoring: ["read", "write", "edit", "grep", "find", "ls", "glob"],
-	builder: ["read", "write", "edit", "bash", "grep", "find", "ls", "glob"],
-};
-
-function parseCsv(value?: string): string[] {
-	return value ? value.split(",").map((t) => t.trim()).filter(Boolean) : [];
-}
-
-function resolveToolProfiles(profileNames: string[]): string[] {
-	const resolved: string[] = [];
-	for (const profileName of profileNames) {
-		const profile = TOOL_PROFILES[profileName];
-		if (!profile) continue;
-		for (const tool of profile) {
-			if (!resolved.includes(tool)) resolved.push(tool);
-		}
-	}
-	return resolved;
 }
 
 /**
@@ -78,18 +50,10 @@ export function parseAgentFile(filePath: string): AgentDef | null {
 
 		if (!frontmatter.name) return null;
 
-		const profileTools = resolveToolProfiles(parseCsv(frontmatter.tool_profile || frontmatter.tool_profiles));
-		const explicitTools = parseCsv(frontmatter.tools);
-		const tools = explicitTools.length > 0
-			? explicitTools
-			: profileTools.length > 0
-				? profileTools
-				: ["read", "grep", "find", "ls", "glob"];
-
 		return {
 			name: frontmatter.name,
 			description: frontmatter.description || "",
-			tools: tools.join(","),
+			tools: frontmatter.tools || "read,grep,find,ls",
 			systemPrompt: match[2].trim(),
 			file: filePath,
 		};
