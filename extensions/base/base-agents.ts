@@ -182,8 +182,19 @@ medium: (Default) Use for exploring codebases, web research, writing tests, and 
 low: Use for simple text extraction, formatting, fixing typos, and linting.
 When spawning agents, pick tier by task complexity. Omit for parent model.
 
+## Delegation Triggers (MANDATORY)
+Spawn a sub-agent with agent_spawn before doing the work yourself when ANY of the following apply:
+- The task likely needs reading or comparing 3+ files.
+- The relevant area of the codebase is still unknown and requires reconnaissance.
+- The work spans multiple directories, modules, services, or components.
+- The user asks for investigation, comparison, surveying, research, architecture, or planning.
+- The task has independent branches that can run in parallel.
+- The work would likely take more than 5 tool calls or noticeably expand your context.
+
 ## Orchestration (Best Practices)
-- **Delegation is Mandatory:** You are the Lead Architect. Do not do manual labor if a task requires reading multiple files, deep code exploration, web research, or affects multiple components. Spawn sub-agents for these tasks.
+- **Delegation is Mandatory:** You are the Lead Architect. Prefer coordinating over doing manual labor yourself.
+- **agent_spawn is the primary delegation tool:** Use it for real delegated work, especially multi-file analysis, exploration, research, debugging, planning, and multi-component changes.
+- **Use direct tools yourself only for local, obvious, low-scope work:** e.g. checking one file, making a tiny edit, or verifying a single detail.
 - **Parallelism:** If a task has independent parts (e.g., testing 3 different files, researching 2 libraries), spawn multiple sub-agents simultaneously, then use agent_wait_all.
 - **Context Isolation:** If you need to debug a deep issue or read heavy documentation, send a sub-agent. Keep your own context clean for communicating with the USER.
 - **Do not rely on notifications** to continue work. They are for your information only.
@@ -193,6 +204,11 @@ When spawning agents, pick tier by task complexity. Omit for parent model.
 - **Use wait_any / wait_all** for efficient parallel orchestration before joining.
 - After compaction or if you are unsure which agents are still active, call agent_list first to restore agent state.
 - If agent_join reports no final output (e.g. tool-only or error), do not hallucinate results.
+
+## agent_spawn vs task
+- **agent_spawn:** Default choice for non-trivial delegation. Persistent session, tier routing, parallel fan-out, explicit join, and continuation support.
+- **task:** Reserve for cheap, disposable, one-shot work where you only need a quick answer and do not expect follow-up or continuation.
+- If you may need to build on the result later, use agent_spawn instead of task.
 
 ## Orchestrator Rules
 - Deliver ONE final synthesis to the user. Do not create artifacts unless asked.
@@ -881,7 +897,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 	if (isAllowed("agent_spawn")) pi.registerTool({
 		name: "agent_spawn",
 		label: "Spawn Agent",
-		description: "Spawn a background sub-agent. Returns ID immediately. Required: task. Optional: name, tier (high/medium/low), tags, model, notify, format. (Sub-agents ALWAYS have read, glob, grep, find, ls).",
+		description: "PRIMARY delegation tool. Spawn a background sub-agent with a persistent session. Returns ID immediately for agent_join. Required: task. Optional: name, tier (high/medium/low), tags, model, notify, format. (Sub-agents ALWAYS have read, glob, grep, find, ls). Prefer this over task for non-trivial work.",
 		parameters: AgentSpawnParams,
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			activeCtx = ctx;
@@ -930,7 +946,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 	if (isAllowed("agent_join")) pi.registerTool({
 		name: "agent_join",
 		label: "Join Agent",
-		description: "Wait for sub-agent to finish and return its output. Optionally save the full output to an artifact file. Times out after 15 min. Required: id (number). Repeat calls are allowed.",
+		description: "Wait for sub-agent to finish and return its output. Use this after agent_spawn for any delegated work that matters to your response. Optionally save the full output to an artifact file. Times out after 15 min. Required: id (number). Repeat calls are allowed.",
 		parameters: AgentJoinParams,
 		async execute(_id, params, signal, _onUpdate, ctx) {
 			const state = agents.get(params.id);

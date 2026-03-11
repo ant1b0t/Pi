@@ -64,7 +64,7 @@ const SCRIPT_RUN_OUTPUT_MAX_LENGTH = 12000; // Max returned output from script_r
 const TOOL_GUIDANCE_MAP: Record<string, string> = {
 	web_fetch: "web_fetch: URL → Markdown (HTML conversion). Start with format=summary only; escalate to full output only when summary is insufficient.",
 	glob: "glob: pattern → files (ripgrep, respects .gitignore)",
-	task: "task: description → disposable one-shot sub-agent. Best for: filtering, bulk scans, cheap isolated analysis, reporting. Not continuable.",
+	task: "task: description → disposable one-shot sub-agent. LIMITED USE ONLY: simple filtering, counting, bulk extraction, or cheap isolated analysis with no follow-up. Do not use for exploration, research, or multi-step delegated work. Prefer agent_spawn when available.",
 	script_run: "script_run: execute a temporary bash/python script for repetitive mechanical work, bulk transforms, filtering, and structured extraction.",
 	apply_patch: "apply_patch: path + unified diff → patched file. Use for complex multi-line semantic edits where 'edit' (exact match) is too brittle. Supports dry_run for validation. Hierarchy: edit (1-5 lines) → apply_patch (complex multi-line) → script_run (mechanical bulk).",
 	ask_user: "ask_user: ask the user directly. Use options(string[]) for fixed choices; omit options for free-form input.",
@@ -79,6 +79,7 @@ const TODO_DISCIPLINE = `
 - Remove tasks that are no longer relevant (todo remove ids:[id]).
 - Never leave tasks in_progress or pending after work is complete — use done or remove.
 - If you change direction mid-task, update the list to reflect the new plan.
+- When a todo requires exploration, research, or multi-file analysis, prefer agent_spawn over task and over doing the work yourself.
 `.trim();
 
 function buildOperationalPolicy(allowed: Set<string> | null): string {
@@ -92,6 +93,10 @@ function buildOperationalPolicy(allowed: Set<string> | null): string {
 	}
 
 	lines.push("- **Sequential for dependent work:** When the next step depends on the result of the previous one, go step by step — do not batch blindly.");
+
+	if (!allowed || allowed.has("agent_spawn")) {
+		lines.push("- **Delegation-first:** If agent_spawn is available, use it for non-trivial exploration, research, multi-file analysis, and parallelizable work. Keep task for disposable one-shot work.");
+	}
 
 	if (!allowed || allowed.has("edit") || allowed.has("apply_patch")) {
 		lines.push("- **Edit hierarchy:** use edit for 1-5 line point changes → apply_patch for complex multi-line semantic edits → script_run for mechanical bulk transforms. Prefer dry_run=true first for apply_patch on critical files.");
@@ -580,7 +585,7 @@ export default function baseTools(pi: ExtensionAPI) {
 
 	// ── task ──
 	if (isAllowed("task")) pi.registerTool({
-		name: "task", label: "Task", description: "Spawn one-shot sub-agent process.", parameters: TaskParams,
+		name: "task", label: "Task", description: "Spawn a disposable one-shot sub-agent process for cheap isolated work. Prefer agent_spawn for non-trivial delegation, continuation, tier routing, or parallel branches.", parameters: TaskParams,
 		async execute(_id, params, signal, onUpdate, ctx) {
 			const { description, tools = "read,bash,grep,find,ls", format } = params;
 			const isConcise = format === "summary only";
