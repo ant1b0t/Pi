@@ -28,6 +28,54 @@ Pi Coding Agent extension examples and experiments.
 
 ## Provider Extensions
 
+### `opencode-zen` — OpenCode Zen Provider
+
+OpenAI-compatible gateway provider for MiniMax via OpenCode Zen.
+
+```bash
+# Quick start
+just ext-opencode-zen
+
+# With base tools (todo, web_fetch, ask_user)
+just ext-opencode-zen-full
+```
+
+**Features:**
+- **Gateway**: `https://opencode.ai/zen/v1`
+- **Protocol**: OpenAI-compatible chat completions
+- **Models**:
+  - `minimax-m2.5-free` (default)
+  - `minimax-m2.5` (fallback)
+- **Behavior**:
+  - defaults to free model
+  - falls back to paid model when the free model is unavailable or unsupported
+  - does **not** silently fall back on auth/quota/rate-limit errors
+- **Commands**:
+  - `/opencode-zen-login`
+  - `/opencode-zen-logout`
+  - `/opencode-zen-status`
+
+**Setup:**
+```bash
+# 1. Log in to OpenCode Zen and obtain your token/key:
+#    https://opencode.ai/ru/zen
+# 2. Add to .env:
+OPENCODE_ZEN_API_KEY=your-key-here
+
+# Optional overrides
+OPENCODE_ZEN_BASE_URL=https://opencode.ai/zen/v1
+OPENCODE_ZEN_DEFAULT_MODEL=minimax-m2.5-free
+OPENCODE_ZEN_FALLBACK_MODEL=minimax-m2.5
+
+# 3. Run
+just ext-opencode-zen
+```
+
+**Notes:**
+- Login / token page: https://opencode.ai/ru/zen
+- Uses OpenCode Zen, not OpenCode Go, because MiniMax requires a different protocol surface.
+- Treat `minimax-m2.5-free` as limited-time and unsuitable for sensitive production code without separate confirmation.
+
 ### `kimi` — Kimi For Coding Provider
 
 Enhanced provider for Kimi For Coding (256K context) with File API support.

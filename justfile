@@ -83,6 +83,14 @@ ext-kimi:
 ext-kimi-full:
     pi -e extensions/provider-kimi.ts -e extensions/base/base-tools.ts -e extensions/examples/minimal.ts
 
+# 17b. OpenCode Zen provider: OpenAI-compatible MiniMax gateway
+ext-opencode-zen:
+    pi -e extensions/provider-opencode-zen.ts -e extensions/examples/minimal.ts
+
+# 17e. OpenCode Zen with base tools
+ext-opencode-zen-full:
+    pi -e extensions/provider-opencode-zen.ts -e extensions/base/base-tools.ts -e extensions/examples/minimal.ts
+
 # === BASE AGENTS (Modular Sub-Agent System) ===
 
 # 18. Base Agents: core sub-agent orchestration (agent_spawn, agent_join, agent_list)
