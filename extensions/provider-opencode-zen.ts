@@ -12,7 +12,7 @@ import {
   type SimpleStreamOptions,
 } from "@mariozechner/pi-ai";
 
-type Api = "openai-completions";
+type Api = "opencode-zen-openai-completions";
 type ErrorCode =
   | "MISSING_API_KEY"
   | "UNAUTHORIZED"
@@ -42,6 +42,7 @@ const API_KEY_ENV = "OPENCODE_ZEN_API_KEY";
 const BASE_URL_ENV = "OPENCODE_ZEN_BASE_URL";
 const DEFAULT_MODEL_ENV = "OPENCODE_ZEN_DEFAULT_MODEL";
 const FALLBACK_MODEL_ENV = "OPENCODE_ZEN_FALLBACK_MODEL";
+const API_ID: Api = "opencode-zen-openai-completions";
 const DEFAULT_BASE_URL = "https://opencode.ai/zen/v1";
 const DEFAULT_MODEL = "minimax-m2.5-free";
 const FALLBACK_MODEL = "minimax-m2.5";
@@ -364,7 +365,7 @@ async function forwardInnerStream(params: {
   });
 
   for await (const event of innerStream) {
-    params.stream.push(patchProviderMetadata(event, PROVIDER_ID, "openai-completions"));
+    params.stream.push(patchProviderMetadata(event, PROVIDER_ID, API_ID));
   }
 }
 
@@ -478,7 +479,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerProvider(PROVIDER_ID, {
     baseUrl,
     apiKey: API_KEY_ENV,
-    api: "openai-completions",
+    api: API_ID,
     headers: {
       "User-Agent": USER_AGENT,
     },
