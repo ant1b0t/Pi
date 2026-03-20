@@ -87,6 +87,14 @@ ext-kimi-full:
 ext-opencode-zen:
     pi -e extensions/provider-opencode-zen.ts -e extensions/examples/minimal.ts
 
+# 17c. Xiaomi MiMo provider: OpenAI-compatible Xiaomi gateway
+ext-xiaomi:
+    pi -e extensions/provider-xiaomi.ts -e extensions/examples/minimal.ts
+
+# 17d. Xiaomi MiMo with base tools
+ext-xiaomi-full:
+    pi -e extensions/provider-xiaomi.ts -e extensions/base/base-tools.ts -e extensions/examples/minimal.ts
+
 # 17e. OpenCode Zen with base tools
 ext-opencode-zen-full:
     pi -e extensions/provider-opencode-zen.ts -e extensions/base/base-tools.ts -e extensions/examples/minimal.ts

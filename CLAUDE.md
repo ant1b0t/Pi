@@ -126,6 +126,16 @@ just ext-kimi
 
 **Testing:** See `specs/provider-kimi-tests.md` for detailed test plan.
 
+### `xiaomi` — Xiaomi MiMo Provider
+
+OpenAI-compatible Xiaomi MiMo provider.
+
+- **Run:** `just ext-xiaomi` / `just ext-xiaomi-full`
+- **Auth:** `XIAOMI_API_KEY` or `/xiaomi-login`
+- **Default model:** `mimo-v2-pro`
+- **Confirmed:** streaming, tool calling, `developer` role, JSON mode, max output `131072`
+- **Note:** `1,048,576` context is still unverified in public official docs
+
 ## UI Extensions
 
 | Extension | Description |
@@ -170,4 +180,7 @@ Copy `.env.example` to `.env` and configure:
 ```bash
 # Required for Kimi provider
 KIMI_API_KEY=sk-your-key-here
+
+# Required for Xiaomi MiMo provider
+XIAOMI_API_KEY=your-key-here
 ```
