@@ -158,7 +158,8 @@
 - [ ] Создаёт файл сессии — Файл существует в `.pi/agent-sessions/`
 - [ ] Запускает процесс pi — Процесс виден в системе
 - [ ] Некорректные теги — Использует базовые инструменты
-- [ ] Пустая задача — Создаёт агента (задача может быть любой)
+- [ ] Пустая задача — Возвращает ошибку delegation guard
+- [ ] Слишком короткая или vague задача — Возвращает ошибку/warning согласно delegation guard
 
 ### 5.2 Инструмент `agent_join`
 - [ ] Агент завершился успешно — Возвращает output, exitCode: 0
@@ -241,8 +242,13 @@
 2. agent_join(id=1) — Получаем результат
 3. agent_continue(id=1, prompt="now find largest")
 4. agent_join(id=1) — Новый результат
-5. Проверить: история сохранена, turnCount > 1
+5. agent_result(id=1, runSeq=2)
+6. Проверить: история сохранена, turnCount > 1, completion envelope читается по runSeq
 ```
+
+Примечание:
+- Этот сценарий гарантирован в рамках живой runtime-сессии Pi.
+- Между отдельными headless / print-mode запусками continuation может не воспроизводиться из-за cleanup sub-agent session files на `session_shutdown`.
 
 ### 6.5 Теги инструментов
 ```
@@ -266,9 +272,24 @@
 ### 6.7 Fork context mode
 ```
 1. Провести короткий диалог с главным агентом
-2. agent_spawn(task="summarize recent discussion", mode="fork", context="recent", contextTurns=4)
+2. agent_spawn(task="summarize recent discussion", mode="fork", context="recent", contextTurns=4, contextMaxChars=4000)
 3. agent_join(id=1)
 4. Проверить: sub-agent видел недавний контекст и использовал его в ответе
+```
+
+### 6.8 Wait-инструменты
+```
+1. agent_spawn(tags="Bash", task="sleep 2 && echo first") — ID 1
+2. agent_spawn(tags="Bash", task="sleep 1 && echo second") — ID 2
+3. agent_wait_any(ids=[1,2], join=true)
+4. agent_wait_all(ids=[1,2], join=true)
+5. Проверить: wait-инструменты умеют ждать и возвращать joined results inline
+```
+
+### 6.9 Fork downgrade-case
+```
+1. agent_spawn(task="summarize recent discussion", mode="fork")
+2. Проверить: агент downgraded до fresh mode и вернул warning
 ```
 
 ---

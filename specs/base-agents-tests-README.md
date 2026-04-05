@@ -4,28 +4,13 @@
 
 | Файл | Тип | Описание |
 |------|-----|----------|
-| `base-agents-tests.md` | Спецификация | Ручной план тестирования с чек-листами |
-| `base-agents.unit.test.ts` | Unit тесты | Автоматические тесты для отдельных модулей |
-| `base-agents.integration.test.ts` | Интеграционные | Тесты всего расширения с моками Pi API |
+| `base-agents-tests.md` | Спецификация | Основной ручной/regression план тестирования с чек-листами |
+| `base-agents-quick-test.md` | Smoke | Быстрые сценарии для ручной проверки основных flows |
+
+На текущий момент в репозитории **нет** отдельных файлов `base-agents.unit.test.ts` и `base-agents.integration.test.ts`.
+Если они появятся позже, этот документ можно расширить реальными командами запуска.
 
 ## Запуск тестов
-
-### Unit тесты
-
-```bash
-# Запуск всех unit-тестов
-bun test specs/base-agents.unit.test.ts
-
-# С подробным выводом
-bun test specs/base-agents.unit.test.ts --verbose
-```
-
-### Интеграционные тесты
-
-```bash
-# Запуск интеграционных тестов
-bun test specs/base-agents.integration.test.ts
-```
 
 ### Ручное тестирование
 
@@ -36,7 +21,14 @@ pi -e extensions/base/base-agents.ts
 # В интерактивном режиме выполнить:
 agent_spawn tags="Bash" task="echo hello" name="test-agent"
 agent_list
-agent_join id=1 timeout=30
+agent_join id=1
+agent_result id=1
+```
+
+### Проверка runtime reload guards
+
+```bash
+python scripts/check-runtime-reload-guards.py
 ```
 
 ## Покрытие модулей
@@ -118,30 +110,16 @@ it("tests full agent lifecycle", async () => {
 
 ## CI/CD интеграция
 
-```yaml
-# .github/workflows/test.yml
-name: Tests
-on: [push, pull_request]
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: oven-sh/setup-bun@v1
-      - run: bun install
-      - run: bun test specs/base-agents.unit.test.ts
-      - run: bun test specs/base-agents.integration.test.ts
-```
+Пока для `base-agents` в репозитории актуальны в первую очередь:
+- ручные smoke/regression сценарии из `base-agents-quick-test.md`
+- расширенный чек-лист из `base-agents-tests.md`
+- проверка `python scripts/check-runtime-reload-guards.py`
 
-## Отладка тестов
+Если в проект позже будут добавлены реальные unit/integration tests, сюда стоит вернуть конкретные CI-команды.
+
+## Отладка
 
 ```bash
-# С отладочным выводом
-DEBUG=bun:test bun test specs/base-agents.unit.test.ts
-
-# Только один describe
-bun test --grep "agent-tags.ts"
-
-# Только один test
-bun test --grep "returns BASE_TOOLS for empty string"
+# С отладочным выводом Pi
+DEBUG=pi:agent pi -e extensions/base/base-agents.ts
 ```

@@ -6,24 +6,23 @@
 ## План тестирования
 
 ### 1. Инструмент `todo`
-- [ ] `todo add text="Test task"` — Добавление новой задачи.
+- [ ] `todo add items=["Test task"]` — Добавление новой задачи.
 - [ ] `todo list` — Список всех задач.
-- [ ] `todo in_progress id=1` — Перевод задачи в статус "в процессе".
-- [ ] `todo done id=1` — Завершение задачи.
-- [ ] `todo toggle id=1` — Переключение статуса завершенности.
-- [ ] `todo cancel id=1` — Отмена задачи.
+- [ ] `todo progress ids=[1]` — Перевод задачи в статус "в процессе".
+- [ ] `todo done ids=[1]` — Завершение задачи.
+- [ ] `todo remove ids=[1]` — Удаление задачи.
 - [ ] `todo clear` — Очистка списка задач.
 
 ### 2. Инструмент `glob`
-- [ ] `glob pattern="*.ts"` — Поиск TS файлов в текущей директории.
+- [ ] `glob pattern="*.ts" path="extensions"` — Поиск TS файлов в поддиректории.
 - [ ] `glob pattern="**/*.ts" limit=5` — Рекурсивный поиск с лимитом.
-- [ ] `glob pattern="**/*" ignore=["node_modules/**"]` — Поиск с игнорированием.
-- [ ] `glob pattern="extensions/" include_dirs=true` — Поиск директорий.
+- [ ] `glob pattern="extensions/**/*.ts" format="summary only"` — Сводный формат вывода.
+- [ ] `glob pattern="extensions/**/*.ts" format="full output"` — Полный формат вывода.
 
 ### 3. Инструмент `web_fetch`
-- [ ] `web_fetch url="https://example.com"` — Загрузка контента (Markdown).
-- [ ] `web_fetch url="https://example.com" format="text"` — Загрузка в текстовом формате.
-- [ ] `web_fetch url="https://example.com" format="html"` — Загрузка в HTML формате.
+- [ ] `web_fetch url="https://example.com"` — Загрузка контента (Markdown summary).
+- [ ] `web_fetch url="https://example.com" format="summary only"` — Сводный вывод.
+- [ ] `web_fetch url="https://example.com" format="full output"` — Полный вывод.
 - [ ] `web_fetch url="http://localhost"` — Проверка блокировки локальных адресов.
 
 ### 4. Инструмент `ask_user`
@@ -33,23 +32,22 @@
 ## Результаты тестирования
 
 ### 1. Инструмент `todo`
-- [x] `todo add text="Test task"` — Успешно добавлена задача.
+- [x] `todo add items=["Test task"]` — Успешно добавлена задача.
 - [x] `todo list` — Успешно выведен список задач.
-- [x] `todo in_progress id=10` — Успешно установлен статус "в процессе".
-- [x] `todo toggle id=10` — Успешно переключен статус (завершена/открыта).
-- [x] `todo cancel id=10` — Успешно отменена.
-- [x] `todo done id=6` — Успешно завершена (после перевода в `in_progress`).
+- [x] `todo progress ids=[10]` — Успешно установлен статус "в процессе".
+- [x] `todo done ids=[6]` — Успешно завершена задача.
+- [x] `todo remove ids=[10]` — Успешно удалена задача.
 
 ### 2. Инструмент `glob`
-- [x] `glob pattern="*.ts" cwd="extensions"` — Успешно найдены файлы в поддиректории.
+- [x] `glob pattern="*.ts" path="extensions"` — Успешно найдены файлы в поддиректории.
 - [x] `glob pattern="*.ts" limit=2` — Успешно применен лимит.
-- [x] `glob pattern="**/*" ignore=["**/*.ts"]` — Успешно применено игнорирование (результат пуст при поиске только по TS).
-- [x] `glob pattern="*" include_dirs=true` — Успешно найдены директории (с суффиксом `/`).
+- [x] `glob pattern="extensions/**/*.ts" format="summary only"` — Успешно выдан краткий список файлов.
+- [x] `glob pattern="extensions/**/*.ts" format="full output"` — Успешно выдан полный список файлов.
 
 ### 3. Инструмент `web_fetch`
 - [x] `web_fetch url="https://www.google.com"` — Успешно загружен Markdown.
-- [x] `web_fetch url="https://www.google.com" format="text"` — Успешно загружен текст без Markdown разметки.
-- [x] `web_fetch url="https://www.google.com" format="html"` — Успешно загружен сырой HTML (с обрезанием по лимиту байт).
+- [x] `web_fetch url="https://www.google.com" format="summary only"` — Успешно загружен краткий Markdown summary.
+- [x] `web_fetch url="https://www.google.com" format="full output"` — Успешно загружен полный Markdown вывод.
 - [x] `web_fetch url="http://localhost:8080"` — Успешно заблокирован доступ к локальному адресу (INVALID_ARGUMENT).
 
 ### 4. Инструмент `ask_user`

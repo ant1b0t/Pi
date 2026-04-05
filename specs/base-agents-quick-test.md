@@ -12,7 +12,7 @@ pi -e extensions/base/base-agents.ts
 ```
 agent_spawn tags="Bash" task="echo 'Hello from agent!'" name="greeter"
 agent_list
-agent_join id=1 timeout=30
+agent_join id=1
 ```
 
 **Ожидаемый результат:**
@@ -48,9 +48,10 @@ agent_list
 ### 4. Продолжение диалога
 ```
 agent_spawn tags="Bash" task="pwd" name="navigator"
-agent_join id=1 timeout=10
+agent_join id=1
 agent_continue id=1 prompt="Now list files here"
-agent_join id=1 timeout=10
+agent_join id=1
+agent_result id=1 runSeq=2
 ```
 
 **Ожидаемый результат:**
@@ -58,10 +59,14 @@ agent_join id=1 timeout=10
 - turnCount > 1
 - Новый ответ содержит список файлов
 
+**Примечание:**
+- Этот сценарий надёжен в рамках живой runtime-сессии Pi.
+- В отдельных headless / print-mode запусках continuation может не сработать, если session files уже очищены при `session_shutdown`.
+
 ### 5. Обработка ошибок
 ```
 agent_spawn tags="Bash" task="exit 1" name="failer"
-agent_join id=1 timeout=10
+agent_join id=1
 ```
 
 **Ожидаемый результат:**
@@ -116,13 +121,33 @@ agent_join id=1
 ### 9. Fork context
 ```
 # Сначала обсудить задачу с главным агентом
-agent_spawn tags="Bash" task="Summarize the recent discussion" mode="fork" context="recent" contextTurns=4 name="forked"
+agent_spawn tags="Bash" task="Summarize the recent discussion" mode="fork" context="recent" contextTurns=4 contextMaxChars=4000 name="forked"
 agent_join id=1
 ```
 
 **Ожидаемый результат:**
 - Sub-agent видит recent parent context
 - В ответе spawn видно `Spawn mode: fork (recent)`
+
+### 10. Fork downgrade-case
+```
+agent_spawn tags="Bash" task="Summarize the recent discussion" mode="fork" name="forked-fallback"
+```
+
+**Ожидаемый результат:**
+- Возвращается warning про downgrade до fresh mode
+
+### 11. Wait-инструменты
+```
+agent_spawn tags="Bash" task="sleep 2 && echo 'First'" name="slow1"
+agent_spawn tags="Bash" task="sleep 1 && echo 'Second'" name="slow2"
+agent_wait_any ids=[1,2] join=true
+agent_wait_all ids=[1,2] join=true
+```
+
+**Ожидаемый результат:**
+- `agent_wait_any` возвращает первый завершившийся результат inline
+- `agent_wait_all` возвращает все результаты inline
 
 ## Проверка файлов
 

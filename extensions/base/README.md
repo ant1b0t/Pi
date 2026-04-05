@@ -65,7 +65,9 @@ agent_list()
 ### 3. Команды пользователя
 
 - `/agents` — показать оверлей со статусами всех агентов
+- `/aenter <id>` — открыть чат-оверлей с конкретным сабагентом
 - `/akill <id>` — убить агента по ID
+- `/acont <id> <prompt>` — продолжить завершённого агента из команды
 - `/aclear` — очистить завершённые агенты из UI
 
 ## 🏷️ Теги инструментов
@@ -128,7 +130,16 @@ export default function (pi: ExtensionAPI) {
 
 - `phase="research|implementation|verification"` — фазовая рамка для sub-agent workflow
 - `mode="fork" context="recent"` — передать дочернему агенту компактный recent context родительской сессии
+- `contextTurns` / `contextMaxChars` — ограничить объём inherited recent context
+- `notify="off|ui|turn"` — настроить способ уведомления о завершении сабагента
+- `artifact=true` — сохранить полный output в файл и вернуть путь
 - `agent_result` — прочитать completion result завершённого агента без ожидания
+
+### Ограничение continuation и cleanup
+
+- `agent_continue` надёжно поддерживается в рамках живой runtime-сессии Pi.
+- При `session_shutdown` файлы sub-agent session могут очищаться автоматически.
+- Поэтому continuation между отдельными headless / print-mode запусками не следует считать гарантированным сценарием, если отдельно не введена политика долгого хранения session files.
 
 ### .pi/model-tiers.json
 
