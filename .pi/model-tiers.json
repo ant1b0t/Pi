@@ -1,13 +1,11 @@
 {
   "high": [
-    "xiaomi/mimo-v2-pro",
-    "openai-codex/gpt-5.4",
-    "openai-codex/gpt-5.3-codex"
+    "openai-codex/gpt-5.4"
   ],
   "medium": [
-    "qwen-code/coder-model"
+    "qwen/coder-model"
   ],
   "low": [
-    "qwen-code/coder-model"
+    "qwen/coder-model"
   ]
 }

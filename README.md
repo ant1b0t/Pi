@@ -90,6 +90,7 @@ bun install
 | **theme-cycler**        | `extensions/examples/theme-cycler.ts`        | Keyboard shortcuts (Ctrl+X/Ctrl+Q) and `/theme` command to cycle/switch between custom themes                                                              |
 | **base-tools**          | `extensions/base/base-tools.ts`               | Core toolset: web_fetch, todo, ask_user, glob                                                                                                              |
 | **base-agents**         | `extensions/base/base-agents.ts`              | Modular sub-agent system: agent_spawn, agent_join, agent_list                                                                                              |
+| **provider-smartrouter** | `extensions/provider-smartrouter.ts`        | SmartRouter OpenAI-compatible provider with Copilot/Codex/Qwen model catalog and `/smartrouter-status`                                                   |
 
 ---
 
@@ -137,16 +138,46 @@ just ext-agent-chain        # Sequential pipeline orchestrator with step chainin
 just ext-pi-pi              # Meta-agent that builds Pi agents using parallel experts
 just ext-session-replay     # Scrollable timeline overlay of session history
 just ext-theme-cycler       # Theme cycler + minimal footer
+just ext-smartrouter        # SmartRouter provider + minimal footer
+just ext-smartrouter-full   # SmartRouter provider + base-tools + minimal footer
 just all                    # Open every extension in its own terminal window
 ```
 
 The `open` recipe allows you to spin up a new terminal window with any combination of stacked extensions (omit `.ts`):
+
+For provider extensions, use names like `provider-smartrouter`, `provider-kimi`, `provider-opencode-zen`, or `provider-xiaomi`.
 
 ```bash
 just open purpose-gate minimal tool-counter-widget
 ```
 
 ---
+
+## SmartRouter Provider
+
+Project-local auto-discovery is enabled via `.pi/extensions/provider-smartrouter.ts`.
+
+Configuration lives in:
+- `.pi/smartrouter.env` — local active config (gitignored)
+- `.pi/smartrouter.env.example` — template
+
+Expected variables:
+```bash
+SMARTROUTER_BASE_URL=https://your-smartrouter-host.example
+SMARTROUTER_API_KEY=...
+SMARTROUTER_ADMIN_TOKEN=...
+```
+
+Useful commands:
+```bash
+just ext-smartrouter
+just ext-smartrouter-full
+```
+
+Inside Pi:
+```text
+/smartrouter-status
+```
 
 ## Project Structure
 
