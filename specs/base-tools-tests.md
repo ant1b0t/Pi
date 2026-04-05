@@ -56,4 +56,8 @@
 - [x] `ask_user question="..." options=["..."]` — Успешно получен выбор пользователя.
 - [x] `ask_user question="..."` — Успешно получен свободный ввод пользователя.
 
+### 5. Runtime reload safety
+- [x] Удалён one-time global reload guard из `extensions/base/base-tools.ts`.
+- [x] Добавлена проверка `just check-runtime-reload-guards` против регрессии для базовых runtime-sensitive extensions.
+
 **Итог:** Все основные функции `base-tools.ts` работают корректно.

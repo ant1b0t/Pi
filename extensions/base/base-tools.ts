@@ -22,10 +22,6 @@ import { applyPatch } from "diff";
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
-	DEFAULT_MAX_BYTES,
-	truncateHead,
-} from "@mariozechner/pi-coding-agent";
-import {
 	matchesKey,
 	Text,
 	truncateToWidth,
@@ -36,9 +32,6 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync, readdirSy
 import { tmpdir } from "os";
 import {
 	invalidArgument,
-	notFound,
-	unauthorized,
-	rateLimited,
 	temporaryUnavailable,
 	conciseDetails,
 } from "./tool-contract.ts";
@@ -55,6 +48,10 @@ const WEB_FETCH_BASE_BACKOFF_MS = 1000;
 const WEB_FETCH_RETRY_STATUS_CODES = [429, 500, 502, 503, 504];
 const TASK_OUTPUT_MAX_LENGTH = 12000; // Max output length for task tool
 const TASK_PREVIEW_LENGTH = 200; // Preview length for task output
+const TASK_TIMEOUT_MS = 15 * 60 * 1000; // Default timeout per task worker
+const TASK_BATCH_MAX_ITEMS = 8;
+const TASK_BATCH_DEFAULT_PARALLEL = 3;
+const TASK_BATCH_MAX_PARALLEL = 4;
 const GLOB_TIMEOUT_MS = 30000; // Timeout for glob command
 const SCRIPT_RUN_TIMEOUT_MS = 120000; // Default timeout for script_run
 const SCRIPT_RUN_OUTPUT_MAX_LENGTH = 12000; // Max returned output from script_run
@@ -64,7 +61,7 @@ const SCRIPT_RUN_OUTPUT_MAX_LENGTH = 12000; // Max returned output from script_r
 const TOOL_GUIDANCE_MAP: Record<string, string> = {
 	web_fetch: "web_fetch: URL → Markdown (HTML conversion). Start with format=summary only; escalate to full output only when summary is insufficient.",
 	glob: "glob: pattern → files (ripgrep, respects .gitignore)",
-	task: "task: description → disposable one-shot sub-agent. LIMITED USE ONLY: simple filtering, counting, bulk extraction, or cheap isolated analysis with no follow-up. Do not use for exploration, research, or multi-step delegated work. Prefer agent_spawn when available.",
+	task: "task: description → disposable one-shot sub-agent. Also supports tasks[] + max_parallel for bounded parallel fan-out. LIMITED USE ONLY: simple filtering, counting, bulk extraction, or cheap isolated analysis with no follow-up. Do not use for exploration, research, or multi-step delegated work. Prefer agent_spawn when available.",
 	script_run: "script_run: execute a temporary bash/python script for repetitive mechanical work, bulk transforms, filtering, and structured extraction.",
 	apply_patch: "apply_patch: path + unified diff → patched file. Use for complex multi-line semantic edits where 'edit' (exact match) is too brittle. Supports dry_run for validation. Hierarchy: edit (1-5 lines) → apply_patch (complex multi-line) → script_run (mechanical bulk).",
 	ask_user: "ask_user: ask the user directly. Use options(string[]) for fixed choices; omit options for free-form input.",
@@ -93,6 +90,10 @@ function buildOperationalPolicy(allowed: Set<string> | null): string {
 	}
 
 	lines.push("- **Sequential for dependent work:** When the next step depends on the result of the previous one, go step by step — do not batch blindly.");
+
+	if (!allowed || allowed.has("task")) {
+		lines.push("- **Bounded fan-out:** Use task(tasks[], max_parallel) for cheap independent checks; use agent_spawn when you need persistent sessions, continuation, or richer orchestration.");
+	}
 
 	if (!allowed || allowed.has("agent_spawn")) {
 		lines.push("- **Delegation-first:** If agent_spawn is available, use it for non-trivial exploration, research, multi-file analysis, and parallelizable work. Keep task for disposable one-shot work.");
@@ -172,13 +173,36 @@ interface GlobDetails {
 }
 
 const TaskParams = Type.Object({
-	description: Type.String({ description: "Task description" }),
+	description: Type.Optional(Type.String({ description: "Task description" })),
+	tasks: Type.Optional(Type.Array(Type.String({ description: "Task description" }), { description: `Independent tasks to run in parallel (max ${TASK_BATCH_MAX_ITEMS})` })),
 	tools: Type.Optional(Type.String({ description: "Tools (default: read,bash,grep,find,ls)" })),
+	timeout_ms: Type.Optional(Type.Number({ description: `Per-worker timeout in ms (default: ${TASK_TIMEOUT_MS})` })),
+	max_output_chars: Type.Optional(Type.Number({ description: `Max returned output chars per worker (default: ${TASK_OUTPUT_MAX_LENGTH})` })),
+	max_parallel: Type.Optional(Type.Number({ description: `Parallel workers for tasks[] (default: ${TASK_BATCH_DEFAULT_PARALLEL}, max: ${TASK_BATCH_MAX_PARALLEL})` })),
 	format: Type.Optional(FormatEnum),
 });
 
-interface TaskDetails {
+interface TaskWorkerDetails {
+	index: number;
 	description: string;
+	status: "running" | "done" | "error";
+	exitCode: number;
+	elapsed: number;
+	turnCount: number;
+	toolCalls: { name: string; preview: string }[];
+	outputPreview: string;
+	outputText?: string;
+	truncated?: boolean;
+	originalLength?: number;
+	error?: string;
+}
+
+interface TaskDetails {
+	description?: string;
+	taskCount: number;
+	completedCount: number;
+	failedCount: number;
+	parallelCount: number;
 	tools: string;
 	status: "running" | "done" | "error";
 	exitCode: number;
@@ -186,7 +210,9 @@ interface TaskDetails {
 	turnCount: number;
 	toolCalls: { name: string; preview: string }[];
 	outputPreview: string;
-	model?: string;
+	timeoutMs?: number;
+	maxOutputChars?: number;
+	workerResults?: TaskWorkerDetails[];
 	format?: "summary only" | "full output";
 	truncated?: boolean;
 	originalLength?: number;
@@ -321,6 +347,118 @@ function truncateScriptOutput(text: string, format?: "summary only" | "full outp
 	return { text: text.slice(0, head) + "\n\n...[middle truncated]...\n\n" + text.slice(-tail), truncated: true, originalLength };
 }
 
+function truncateTaskOutput(text: string, maxOutputChars: number, format?: "summary only" | "full output") {
+	const originalLength = text.length;
+	if (format === "summary only") {
+		const first = text.split("\n\n")[0]?.slice(0, Math.min(1000, maxOutputChars)) ?? "";
+		return { text: first ? first + "..." : "", truncated: originalLength > first.length, originalLength };
+	}
+	if (text.length <= maxOutputChars) return { text, truncated: false, originalLength };
+	if (maxOutputChars <= 1200) return { text: text.slice(0, maxOutputChars) + "...", truncated: true, originalLength };
+	const head = Math.floor(maxOutputChars * 0.7);
+	const tail = Math.max(200, maxOutputChars - head - 24);
+	return { text: text.slice(0, head) + "\n\n...[middle truncated]...\n\n" + text.slice(-tail), truncated: true, originalLength };
+}
+
+async function runTaskWorker(options: {
+	description: string;
+	tools: string;
+	cwd: string;
+	timeoutMs: number;
+	signal?: AbortSignal;
+	onUpdate?: (snapshot: { turnCount: number; toolCalls: { name: string; preview: string }[]; outputPreview: string }) => void;
+}): Promise<{ status: "done" | "error"; exitCode: number; elapsed: number; turnCount: number; toolCalls: { name: string; preview: string }[]; outputPreview: string; text: string; error?: string; }> {
+	const start = Date.now();
+	const piCli = resolvePiCliPath();
+	const args = [piCli, "--mode", "json", "-p", "--no-session", "--no-extensions", "--tools", options.tools, "--thinking", "off", options.description];
+
+	return await new Promise((resolve) => {
+		const proc = spawn(process.execPath, args, {
+			cwd: options.cwd,
+			stdio: ["ignore", "pipe", "pipe"],
+			env: { ...process.env, PI_CLI_PATH: piCli },
+			shell: false,
+		});
+
+		let buf = "";
+		let text = "";
+		let stderr = "";
+		let turnCount = 0;
+		const toolCalls: { name: string; preview: string }[] = [];
+		let finished = false;
+
+		const finish = (result: { status: "done" | "error"; exitCode: number; text: string; error?: string }) => {
+			if (finished) return;
+			finished = true;
+			clearTimeout(timeoutId);
+			resolve({
+				status: result.status,
+				exitCode: result.exitCode,
+				elapsed: Date.now() - start,
+				turnCount,
+				toolCalls: [...toolCalls],
+				outputPreview: text.slice(-TASK_PREVIEW_LENGTH) || result.error || "",
+				text: result.text,
+				error: result.error,
+			});
+		};
+
+		const timeoutId = setTimeout(() => {
+			try { proc.kill(); } catch {}
+			finish({ status: "error", exitCode: -1, text, error: "Task timed out" });
+		}, options.timeoutMs);
+
+		proc.stdout?.setEncoding("utf-8");
+		proc.stdout?.on("data", (chunk: string) => {
+			buf += chunk;
+			const lines = buf.split("\n");
+			buf = lines.pop() || "";
+			for (const line of lines) {
+				if (!line.trim()) continue;
+				try {
+					const ev = JSON.parse(line);
+					if (ev.type === "message_end" && ev.message?.role === "assistant") {
+						turnCount++;
+						for (const p of (ev.message.content || [])) {
+							if (p.type === "text") text += p.text || "";
+							else if (p.type === "toolCall") toolCalls.push({ name: p.name, preview: JSON.stringify(p.arguments || {}).slice(0, 120) });
+						}
+						options.onUpdate?.({ turnCount, toolCalls: [...toolCalls], outputPreview: text.slice(-TASK_PREVIEW_LENGTH) });
+					}
+				} catch {}
+			}
+		});
+
+		proc.stderr?.setEncoding("utf-8");
+		proc.stderr?.on("data", (chunk: string) => {
+			stderr += chunk;
+		});
+
+		proc.on("close", (code) => {
+			if (buf.trim()) {
+				try {
+					const ev = JSON.parse(buf);
+					if (ev.type === "message_end" && ev.message?.role === "assistant") {
+						turnCount++;
+						for (const p of (ev.message.content || [])) {
+							if (p.type === "text") text += p.text || "";
+							else if (p.type === "toolCall") toolCalls.push({ name: p.name, preview: JSON.stringify(p.arguments || {}).slice(0, 120) });
+						}
+					}
+				} catch {}
+			}
+			const normalizedText = text || stderr.trim();
+			finish({ status: code === 0 ? "done" : "error", exitCode: code ?? -1, text: normalizedText, error: code === 0 ? undefined : (stderr.trim() || "Task failed") });
+		});
+
+		proc.on("error", (err) => finish({ status: "error", exitCode: -1, text, error: err.message }));
+		options.signal?.addEventListener("abort", () => {
+			try { proc.kill(); } catch {}
+			finish({ status: "error", exitCode: -1, text, error: "Task cancelled by user" });
+		}, { once: true });
+	});
+}
+
 function htmlToMarkdown(html: string): string {
 	let text = html;
 	text = text.replace(/<script[\s\S]*?<\/script>/gi, "");
@@ -428,10 +566,8 @@ async function runRipgrep(pattern: string, searchPath: string, cwd: string, time
 // ═══════════════════════════════════════════════════════════════════════
 
 export default function baseTools(pi: ExtensionAPI) {
-	const globalKey = "__pi_vs_cc_base_tools_loaded__";
-	if ((globalThis as Record<string, unknown>)[globalKey]) return;
-	(globalThis as Record<string, unknown>)[globalKey] = true;
-
+	// Re-register on every runtime/session recreation. Avoid one-time global guards here:
+	// Pi 0.65+ may rebuild the extension runtime on /new, /resume, /fork, and /reload.
 	const rawTools = process.env.PI_AGENT_ALLOWED_TOOLS;
 	const allowedTools = rawTools ? new Set(rawTools.split(",").map(t => t.trim()).filter(Boolean)) : null;
 
@@ -585,62 +721,154 @@ export default function baseTools(pi: ExtensionAPI) {
 
 	// ── task ──
 	if (isAllowed("task")) pi.registerTool({
-		name: "task", label: "Task", description: "Spawn a disposable one-shot sub-agent process for cheap isolated work. Prefer agent_spawn for non-trivial delegation, continuation, tier routing, or parallel branches.", parameters: TaskParams,
+		name: "task", label: "Task", description: "Spawn a disposable one-shot sub-agent process for cheap isolated work. Also supports bounded fan-out via tasks[] + max_parallel. Prefer agent_spawn for non-trivial delegation, continuation, tier routing, or parallel branches.", parameters: TaskParams,
 		async execute(_id, params, signal, onUpdate, ctx) {
-			const { description, tools = "read,bash,grep,find,ls", format } = params;
-			const isConcise = format === "summary only";
-			const details: TaskDetails = { description, tools, status: "running", exitCode: -1, elapsed: 0, turnCount: 0, toolCalls: [], outputPreview: "", format };
-			const start = Date.now();
-			const emit = () => onUpdate?.({ content: [{ type: "text", text: details.outputPreview || "(running…)" }], details: { ...details } });
-			const timer = setInterval(() => { details.elapsed = Date.now() - start; emit(); }, 1000);
-			let out: string;
-			try {
-				out = await new Promise<string>((resolve, reject) => {
-					const piCli = resolvePiCliPath();
-					const args = [piCli, "--mode", "json", "-p", "--no-session", "--no-extensions", "--tools", tools, "--thinking", "off", description];
-					const proc = spawn(process.execPath, args, {
-						cwd: ctx.cwd,
-						stdio: ["ignore", "pipe", "pipe"],
-						env: { ...process.env, PI_CLI_PATH: piCli },
-						shell: false
-					});
-					let buf = "", chunks = "";
-					const timeoutId = setTimeout(() => { proc.kill(); reject(new Error("Task timed out")); }, 15 * 60 * 1000);
-					proc.stdout!.on("data", c => {
-						buf += c; const lines = buf.split("\n"); buf = lines.pop() || "";
-						for (const l of lines) {
-							try {
-								const ev = JSON.parse(l);
-								if (ev.type === "message_end" && ev.message?.role === "assistant") {
-									details.turnCount++;
-									for (const p of ev.message.content) {
-										if (p.type === "text") chunks += p.text;
-										else if (p.type === "toolCall") details.toolCalls.push({ name: p.name, preview: "" });
-									}
-									details.outputPreview = chunks.slice(-TASK_PREVIEW_LENGTH); emit();
-								}
-							} catch {}
-						}
-					});
-					proc.on("close", code => { clearTimeout(timeoutId); clearInterval(timer); details.status = code === 0 ? "done" : "error"; details.exitCode = code ?? -1; resolve(chunks); });
-					proc.on("error", e => { clearTimeout(timeoutId); clearInterval(timer); reject(e); });
-					if (signal) signal.addEventListener("abort", () => { clearTimeout(timeoutId); proc.kill(); });
-				});
-			} catch (err: any) {
-				clearInterval(timer); details.status = "error";
-				return { content: [{ type: "text", text: `Error: ${err.message}` }], details: conciseDetails(`Task failed`, { ...details, error: err.message }), isError: true };
+			const description = params.description?.trim() || "";
+			const tasks = (params.tasks || []).map((task) => task.trim()).filter(Boolean);
+			if ((description ? 1 : 0) + (tasks.length > 0 ? 1 : 0) !== 1) {
+				return invalidArgument("Provide either description or tasks[]", "Retry with one task or a bounded task list, but not both").toToolResult();
 			}
-			const originalLength = out.length;
-			const outputText = isConcise ? (out.split("\n\n")[0]?.slice(0, 4000) ?? "") + "..." : out.slice(0, TASK_OUTPUT_MAX_LENGTH);
-			details.truncated = originalLength > TASK_OUTPUT_MAX_LENGTH;
-			details.originalLength = originalLength;
-			return { content: [{ type: "text", text: outputText }], details: conciseDetails(`Task ${details.status}`, details) };
+			if (tasks.length > TASK_BATCH_MAX_ITEMS) {
+				return invalidArgument(`tasks[] exceeds limit (${TASK_BATCH_MAX_ITEMS})`, `Retry with at most ${TASK_BATCH_MAX_ITEMS} independent tasks`).toToolResult();
+			}
+
+			const timeoutMs = Math.floor(params.timeout_ms ?? TASK_TIMEOUT_MS);
+			if (!Number.isFinite(timeoutMs) || timeoutMs < 1000) {
+				return invalidArgument("timeout_ms must be at least 1000", "Retry with a larger timeout").toToolResult();
+			}
+			const maxOutputChars = Math.floor(params.max_output_chars ?? TASK_OUTPUT_MAX_LENGTH);
+			if (!Number.isFinite(maxOutputChars) || maxOutputChars < 500) {
+				return invalidArgument("max_output_chars must be at least 500", "Retry with a larger output cap").toToolResult();
+			}
+
+			const descriptions = tasks.length > 0 ? tasks : [description];
+			const parallelCount = Math.min(Math.max(1, Math.floor(params.max_parallel ?? TASK_BATCH_DEFAULT_PARALLEL)), TASK_BATCH_MAX_PARALLEL, descriptions.length);
+			const tools = params.tools || "read,bash,grep,find,ls";
+			const details: TaskDetails = {
+				description: description || undefined,
+				taskCount: descriptions.length,
+				completedCount: 0,
+				failedCount: 0,
+				parallelCount,
+				tools,
+				status: "running",
+				exitCode: -1,
+				elapsed: 0,
+				turnCount: 0,
+				toolCalls: [],
+				outputPreview: descriptions.length > 1 ? `0/${descriptions.length} done` : "(running…)",
+				timeoutMs,
+				maxOutputChars,
+				format: params.format,
+				workerResults: descriptions.map((taskDescription, index) => ({
+					index,
+					description: taskDescription,
+					status: "running",
+					exitCode: -1,
+					elapsed: 0,
+					turnCount: 0,
+					toolCalls: [],
+					outputPreview: "",
+				})),
+			};
+			const start = Date.now();
+			const emit = () => onUpdate?.({ content: [{ type: "text", text: details.outputPreview || "(running…)" }], details: { ...details, workerResults: details.workerResults?.map((worker) => ({ ...worker })) } });
+			const timer = setInterval(() => {
+				details.elapsed = Date.now() - start;
+				for (const worker of details.workerResults || []) {
+					if (worker.status === "running") worker.elapsed = Date.now() - start;
+				}
+				emit();
+			}, 1000);
+
+			const buildBatchPreview = () => {
+				const lines = [`${details.completedCount}/${details.taskCount} done${details.failedCount ? ` · ${details.failedCount} failed` : ""}`];
+				for (const worker of (details.workerResults || []).slice(0, 3)) {
+					lines.push(`#${worker.index + 1} ${worker.status} · ${truncateToWidth(worker.description, 50)}`);
+				}
+				return lines.join("\n");
+			};
+
+			try {
+				let nextIndex = 0;
+				const runWorker = async () => {
+					while (true) {
+						if (signal?.aborted) return;
+						const index = nextIndex++;
+						if (index >= descriptions.length) return;
+						const worker = details.workerResults![index];
+						const result = await runTaskWorker({
+							description: descriptions[index],
+							tools,
+							cwd: ctx.cwd,
+							timeoutMs,
+							signal,
+							onUpdate: (snapshot) => {
+								worker.turnCount = snapshot.turnCount;
+								worker.toolCalls = snapshot.toolCalls;
+								worker.outputPreview = snapshot.outputPreview;
+								details.turnCount = (details.workerResults || []).reduce((sum, item) => sum + item.turnCount, 0);
+								details.toolCalls = (details.workerResults || []).flatMap((item) => item.toolCalls).slice(-30);
+								details.outputPreview = descriptions.length > 1 ? buildBatchPreview() : (snapshot.outputPreview || "(running…)");
+								emit();
+							},
+						});
+
+						worker.status = result.status;
+						worker.exitCode = result.exitCode;
+						worker.elapsed = result.elapsed;
+						worker.turnCount = result.turnCount;
+						worker.toolCalls = result.toolCalls;
+						worker.outputPreview = result.outputPreview;
+						worker.outputText = result.text;
+						worker.error = result.error;
+						const formatted = truncateTaskOutput(result.text || (result.error || ""), maxOutputChars, params.format);
+						worker.truncated = formatted.truncated;
+						worker.originalLength = formatted.originalLength;
+						details.completedCount++;
+						if (result.status === "error") details.failedCount++;
+						details.turnCount = (details.workerResults || []).reduce((sum, item) => sum + item.turnCount, 0);
+						details.toolCalls = (details.workerResults || []).flatMap((item) => item.toolCalls).slice(-30);
+						details.outputPreview = descriptions.length > 1 ? buildBatchPreview() : (result.outputPreview || result.error || "(done)");
+						emit();
+					}
+				};
+
+				await Promise.all(Array.from({ length: parallelCount }, () => runWorker()));
+			} catch (err: any) {
+				clearInterval(timer);
+				details.status = "error";
+				details.elapsed = Date.now() - start;
+				return { content: [{ type: "text", text: `Error: ${err.message}` }], details: conciseDetails(`Task failed`, { ...details, error: err.message }), isError: true };
+			} finally {
+				clearInterval(timer);
+			}
+
+			details.elapsed = Date.now() - start;
+			details.status = details.failedCount > 0 ? "error" : "done";
+			details.exitCode = details.failedCount > 0 ? 1 : 0;
+			details.truncated = (details.workerResults || []).some((worker) => worker.truncated === true);
+			details.originalLength = (details.workerResults || []).reduce((sum, worker) => sum + (worker.originalLength || 0), 0);
+
+			const rendered = (details.workerResults || []).map((worker) => {
+				const source = worker.status === "error"
+					? [worker.error ? `Error: ${worker.error}` : "", worker.outputText ? `Partial output:\n${worker.outputText}` : ""].filter(Boolean).join("\n\n")
+					: (worker.outputText || worker.outputPreview || "(task produced no output)");
+				const formatted = truncateTaskOutput(source, maxOutputChars, params.format);
+				return descriptions.length === 1 ? formatted.text : `#${worker.index + 1} · ${worker.description}\n${formatted.text}`;
+			});
+
+			return { content: [{ type: "text", text: rendered.join("\n\n") }], details: conciseDetails(`Task ${details.status}`, details), isError: details.status === "error" };
 		},
-		renderCall(args, theme) { return new Text(theme.fg("toolTitle", "task ") + theme.fg("dim", args.description.slice(0, 50)), 0, 0); },
+		renderCall(args, theme) {
+			const preview = Array.isArray((args as any).tasks) && (args as any).tasks.length > 0 ? `${(args as any).tasks.length} tasks` : (((args as any).description || "").slice(0, 50));
+			return new Text(theme.fg("toolTitle", "task ") + theme.fg("dim", preview), 0, 0);
+		},
 		renderResult(res, _o, theme) {
 			const d = res.details as TaskDetails;
 			const modeIcon = d?.format === "summary only" ? "📦" : "📄";
-			return new Text((d?.status === "done" ? theme.fg("success", "✓ ") : theme.fg("error", "✗ ")) + theme.fg("toolTitle", "task ") + theme.fg("dim", `${modeIcon} ${Math.round(d?.elapsed/1000)}s`), 0, 0);
+			const countText = d?.taskCount && d.taskCount > 1 ? ` · ${d.completedCount}/${d.taskCount}` : "";
+			return new Text((d?.status === "done" ? theme.fg("success", "✓ ") : theme.fg("error", "✗ ")) + theme.fg("toolTitle", "task ") + theme.fg("dim", `${modeIcon} ${Math.round(d?.elapsed/1000)}s${countText}`), 0, 0);
 		}
 	});
 
