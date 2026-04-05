@@ -6,10 +6,13 @@
 
 | Файл | Назначение | Экспорты |
 |------|------------|----------|
-| `base-agents.ts` | Основной файл с инструментами | `agent_spawn`, `agent_join`, `agent_list`, `agent_continue` |
+| `base-agents.ts` | Основной файл с инструментами | `agent_spawn`, `agent_join`, `agent_result`, `agent_list`, `agent_continue` |
 | `agent-runner.ts` | Запуск процессов и сессии | `spawnPiProcess`, `makeSessionFile`, `resolveToolsParam` |
 | `agent-events.ts` | Парсинг событий | `parseAgentEvent`, `extractTerminalResultFromFile` |
+| `agent-completion.ts` | Completion envelope и persistence | `persistCompletionEnvelope`, `readCompletionEnvelope` |
 | `agent-tags.ts` | Теги → инструменты | `resolveTagsToTools`, `getBuiltinTools` |
+| `coordinator-mode.ts` | Фазы orchestration | `normalizePhase`, `buildPhaseGuidance`, `validatePhaseTransition` |
+| `fork-context.ts` | Форк контекста родителя | `normalizeSpawnMode`, `buildForkContextPrompt` |
 | `model-tiers.ts` | Уровни моделей | `loadModelTiers`, `resolveModel`, `currentModelString` |
 | `agent-defs.ts` | Парсинг .md агентов | `parseAgentFile`, `scanAgentDirs` |
 | `themeMap.ts` | UI темы | `applyExtensionDefaults` |
@@ -35,21 +38,28 @@ agent_spawn({
 
 // Дождаться завершения
 agent_join({
-  id: 1,                  // ID агента
-  timeout: 300            // Таймаут в секундах
+  id: 1,
+  format: "summary only"
+})
+
+// Прочитать результат позже без ожидания
+agent_result({
+  id: 1,
+  runSeq: 1
 })
 
 // Продолжить диалог
 agent_continue({
   id: 1,
-  prompt: "Now fix them"
+  prompt: "Now fix them",
+  phase: "implementation"
 })
 
 // Список агентов
 agent_list()
 
 // Убить агента
-agent_kill({ id: 1 })
+/akill 1
 ```
 
 ### 3. Команды пользователя
@@ -64,11 +74,10 @@ agent_kill({ id: 1 })
 |-----|-------------|
 | `Bash` | read, grep, find, ls, glob, bash, script_run |
 | `Web` | + web_fetch |
-| `FS` | + edit, write, apply_patch |
-| `Agents` | + agent_spawn, agent_join, agent_continue, agent_list |
+| `Wr` | + edit, write, apply_patch |
+| `Agents` | + agent_spawn, agent_join, agent_result, agent_continue, agent_list |
 | `Task` | + task (одноразовый саб-агент) |
 | `UI` | + ask_user, todo |
-| `All` | все инструменты |
 
 Базовые инструменты (`read`, `grep`, `find`, `ls`, `glob`) включены всегда.
 
@@ -94,8 +103,10 @@ export default function (pi: ExtensionAPI) {
       const proc = spawnPiProcess({
         task: args.task,
         sessionFile,
-        tools,
+        toolList: tools,
+        extensions: [],
         model: ctx.model?.id,
+        cwd: ctx.cwd,
       });
       
       // 4. Парсить события
@@ -112,6 +123,12 @@ export default function (pi: ExtensionAPI) {
 См. полный пример в `extensions/examples/agent-team.ts`.
 
 ## ⚙️ Конфигурация
+
+### Дополнительные возможности orchestrator
+
+- `phase="research|implementation|verification"` — фазовая рамка для sub-agent workflow
+- `mode="fork" context="recent"` — передать дочернему агенту компактный recent context родительской сессии
+- `agent_result` — прочитать completion result завершённого агента без ожидания
 
 ### .pi/model-tiers.json
 
@@ -154,7 +171,6 @@ You are a scout agent. Explore and report.
 ```typescript
 // agent-runner.ts
 AGENT_JOIN_TIMEOUT_MS = 15 * 60 * 1000  // 15 минут
-AGENT_JOIN_POLL_INTERVAL_MS = 500        // 0.5 сек
 WIDGET_UPDATE_INTERVAL_MS = 1000         // 1 сек
 SIGKILL_DELAY_MS = 3000                  // 3 сек до SIGKILL
 ```

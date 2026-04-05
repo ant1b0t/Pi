@@ -37,7 +37,12 @@ import { Type } from "@sinclair/typebox";
 import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import { resolveTagsToTools } from "./agent-tags.ts";
+import { ADVERTISED_TAGS_DESCRIPTION, resolveTagsToTools } from "./agent-tags.ts";
+import { validateDelegationPrompt } from "./delegation-guard.ts";
+import { ALLOWED_TOOLS_ENV, buildAllowedToolsEnv } from "./allowed-tools.ts";
+import { persistCompletionEnvelope, readCompletionEnvelope } from "./agent-completion.ts";
+import { buildPhaseGuidance, normalizePhase, type AgentWorkPhase, validatePhaseTransition } from "./coordinator-mode.ts";
+import { buildForkContextPrompt, normalizeForkContextMode, normalizeSpawnMode, type AgentSpawnMode, type ForkContextMode } from "./fork-context.ts";
 import {
 	parseAgentEvent,
 	parseSessionFile,
@@ -46,13 +51,11 @@ import {
 } from "./agent-events.ts";
 import {
 	AGENT_JOIN_TIMEOUT_MS,
-	AGENT_JOIN_POLL_INTERVAL_MS,
 	AGENT_NOTIFICATION_DELAY_MS,
 	MAX_FULL_OUTPUT,
 	MAX_STDERR_LINES,
 	SESSION_FILE_RETRY_ATTEMPTS,
 	SESSION_FILE_RETRY_DELAY_MS,
-	SIGKILL_DELAY_MS,
 	WIDGET_UPDATE_INTERVAL_MS,
 	canonicalizeToolList,
 	cleanSessionDir,
@@ -112,6 +115,14 @@ interface SubAgentState {
 	notifyMode?: "off" | "ui" | "turn";
 	/** Timestamp of the latest visible activity for auto-focus in compact UI. */
 	lastActivityAt: number;
+	/** Completion envelope file for the current/last run. */
+	completionFile?: string;
+	/** Optional execution phase for orchestration. */
+	phase?: AgentWorkPhase;
+	/** Spawn mode: fresh or forked context. */
+	spawnMode?: AgentSpawnMode;
+	/** Fork context strategy used for this run. */
+	forkContextMode?: ForkContextMode;
 }
 
 // ── Schemas ────────────────────────────────────────────────────────────
@@ -128,14 +139,31 @@ const NotifyEnum = Type.String({
 	description: 'Notification mode. Allowed: "off" | "ui" | "turn"',
 });
 
+const PhaseEnum = Type.String({
+	description: 'Work phase. Allowed: "research" | "implementation" | "verification"',
+});
+
+const SpawnModeEnum = Type.String({
+	description: 'Spawn mode. Allowed: "fresh" | "fork"',
+});
+
+const ForkContextEnum = Type.String({
+	description: 'Fork context mode. Allowed: "none" | "recent"',
+});
+
 const AgentSpawnParams = Type.Object({
 	task: Type.String({ description: "Task description" }),
 	name: Type.Optional(Type.String({ description: "Name (e.g. researcher)" })),
-	tags: Type.Optional(Type.String({ description: "Capability tags as comma-separated string: Wr,Web,Bash,Agents,Task. (read, glob, grep, ls, find are ALWAYS included)" })),
+	tags: Type.Optional(Type.String({ description: `Capability tags as comma-separated string: ${ADVERTISED_TAGS_DESCRIPTION}. (read, glob, grep, ls, find are ALWAYS included)` })),
 	format: Type.Optional(FormatEnum),
 	tier: Type.Optional(TierEnum),
 	model: Type.Optional(Type.String({ description: "Explicit model string (overrides tier)" })),
 	notify: Type.Optional(NotifyEnum),
+	phase: Type.Optional(PhaseEnum),
+	mode: Type.Optional(SpawnModeEnum),
+	context: Type.Optional(ForkContextEnum),
+	contextTurns: Type.Optional(Type.Number({ description: "Recent parent turns to include in fork mode. Default: 6." })),
+	contextMaxChars: Type.Optional(Type.Number({ description: "Max forked context characters. Default: 12000." })),
 });
 
 const AgentJoinParams = Type.Object({
@@ -144,19 +172,30 @@ const AgentJoinParams = Type.Object({
 	artifact: Type.Optional(Type.Boolean({ description: "If true, save the full agent output to an artifact file and return a preview + absolute path." })),
 });
 
+const AgentResultParams = Type.Object({
+	id: Type.Number({ description: "Agent ID" }),
+	runSeq: Type.Optional(Type.Number({ description: "Specific run sequence to read (defaults to latest run)." })),
+	format: Type.Optional(FormatEnum),
+	artifact: Type.Optional(Type.Boolean({ description: "If true, save the full agent output to an artifact file and return a preview + absolute path." })),
+});
+
 const AgentContinueParams = Type.Object({
 	id: Type.Number({ description: "Agent ID" }),
 	prompt: Type.String({ description: "New instructions" }),
-	tags: Type.Optional(Type.String({ description: "Capability tags as comma-separated string: Wr,Web,Bash,Agents,Task. (read, glob, grep, ls, find are ALWAYS included)" })),
+	tags: Type.Optional(Type.String({ description: `Capability tags as comma-separated string: ${ADVERTISED_TAGS_DESCRIPTION}. (read, glob, grep, ls, find are ALWAYS included)` })),
 	format: Type.Optional(FormatEnum),
 	tier: Type.Optional(TierEnum),
 	model: Type.Optional(Type.String({ description: "Explicit model string (overrides tier)" })),
 	notify: Type.Optional(NotifyEnum),
+	phase: Type.Optional(PhaseEnum),
 });
 
 const AgentWaitParams = Type.Object({
 	ids: Type.Optional(Type.Array(Type.Number(), { description: "Optional list of agent IDs to wait for. If omitted, waits for ALL running agents." })),
 	timeoutMs: Type.Optional(Type.Number({ description: "Wait timeout in ms. Default: 15 min." })),
+	join: Type.Optional(Type.Boolean({ description: "If true, return joined result(s) directly for completed agents." })),
+	format: Type.Optional(FormatEnum),
+	artifact: Type.Optional(Type.Boolean({ description: "If true, save joined full output(s) to artifact file(s)." })),
 });
 
 const AgentListParams = Type.Object({});
@@ -171,9 +210,10 @@ const ORCHESTRATOR_GUIDANCE = `
 ## Agents
 spawn: async, parallel task → ID (immediate)
 join: wait for agent → output (timeout 15min, Escape cancel)
+result: read completion result of a finished agent without waiting
 continue: resume session (history preserved, turn+1)
 list: all agents + status
-agent_wait_any / agent_wait_all: block until sub-agents finish (ids optional)
+agent_wait_any / agent_wait_all: wait for completion; set join:true to return results directly
 CLI: /agents, /aenter <id>, /akill <id>, /acont <id> <prompt>, /aclear
 
 ## Model tiers
@@ -181,6 +221,19 @@ high: STRICTLY for architecture design, complex planning, and deep algorithmic d
 medium: (Default) Use for exploring codebases, web research, writing tests, and standard feature implementation.
 low: Use for simple text extraction, formatting, fixing typos, and linting.
 When spawning agents, pick tier by task complexity. Omit for parent model.
+
+## Phased orchestration
+Use phase labels when the workflow is naturally split:
+- research — investigate, map code, compare options, gather evidence
+- implementation — make the change, write code, update tests/docs
+- verification — validate behavior, review diffs, run checks, summarize risks
+Prefer passing prior phase output into the next phase explicitly.
+
+## Fork context mode
+agent_spawn supports mode=fork for contextual side-workers.
+- fresh — default isolated sub-agent with an empty session
+- fork — injects a compact snapshot of recent parent conversation into the delegated task
+Use fork only when the worker needs recent conversational context. Prefer fresh when isolation is better.
 
 ## Delegation Triggers (MANDATORY)
 Spawn a sub-agent with agent_spawn before doing the work yourself when ANY of the following apply:
@@ -195,13 +248,15 @@ Spawn a sub-agent with agent_spawn before doing the work yourself when ANY of th
 - **Delegation is Mandatory:** You are the Lead Architect. Prefer coordinating over doing manual labor yourself.
 - **agent_spawn is the primary delegation tool:** Use it for real delegated work, especially multi-file analysis, exploration, research, debugging, planning, and multi-component changes.
 - **Use direct tools yourself only for local, obvious, low-scope work:** e.g. checking one file, making a tiny edit, or verifying a single detail.
-- **Parallelism:** If a task has independent parts (e.g., testing 3 different files, researching 2 libraries), spawn multiple sub-agents simultaneously, then use agent_wait_all.
+- **Parallelism:** If a task has independent parts (e.g., testing 3 different files, researching 2 libraries), spawn multiple sub-agents simultaneously, then use agent_wait_all(join:true) when possible.
 - **Context Isolation:** If you need to debug a deep issue or read heavy documentation, send a sub-agent. Keep your own context clean for communicating with the USER.
 - **Do not rely on notifications** to continue work. They are for your information only.
 - **Use agent_join** when you need a result. It now returns diagnostic info if no text summary exists.
-- **Do not leave finished agents unjoined** if their work matters to the answer. After agent_wait_any / agent_wait_all, explicitly join every completed agent you intend to rely on.
-- For very long outputs, prefer agent_join with artifact:true to save the full result to a file and keep chat context small.
-- **Use wait_any / wait_all** for efficient parallel orchestration before joining.
+- **Use agent_result** to inspect a finished agent later without blocking.
+- **Use join:true on agent_wait_any / agent_wait_all** when you want waiting + retrieval in one step.
+- **Do not leave finished agents unjoined** if their work matters to the answer.
+- For very long outputs, prefer agent_join or wait(join:true) with artifact:true to save the full result to a file and keep chat context small.
+- **Use wait_any / wait_all** for efficient parallel orchestration; join inline when possible.
 - After compaction or if you are unsure which agents are still active, call agent_list first to restore agent state.
 - If agent_join reports no final output (e.g. tool-only or error), do not hallucinate results.
 
@@ -273,8 +328,14 @@ function getAgentMetaParts(meta: {
 	tier?: string;
 	model?: string;
 	tags?: string | string[];
+	phase?: AgentWorkPhase;
+	spawnMode?: AgentSpawnMode;
+	forkContextMode?: ForkContextMode;
 }): string[] {
-	return [meta.tier, modelLabel(meta.model), meta.tags]
+	const modePart = meta.spawnMode === "fork"
+		? `fork:${meta.forkContextMode || "recent"}`
+		: undefined;
+	return [meta.tier, modelLabel(meta.model), meta.tags, meta.phase, modePart]
 		.map((part) => normalizeMetaPart(part))
 		.filter((part): part is string => Boolean(part));
 }
@@ -283,6 +344,9 @@ function formatAgentMetaInline(meta: {
 	tier?: string;
 	model?: string;
 	tags?: string | string[];
+	phase?: AgentWorkPhase;
+	spawnMode?: AgentSpawnMode;
+	forkContextMode?: ForkContextMode;
 }): string {
 	return getAgentMetaParts(meta).join(" · ");
 }
@@ -291,6 +355,9 @@ function formatAgentMetaBracketed(meta: {
 	tier?: string;
 	model?: string;
 	tags?: string | string[];
+	phase?: AgentWorkPhase;
+	spawnMode?: AgentSpawnMode;
+	forkContextMode?: ForkContextMode;
 }): string {
 	return getAgentMetaParts(meta).map((part) => `[${part}]`).join(" ");
 }
@@ -430,10 +497,8 @@ function getFocusedAgentId(agentList: SubAgentState[]): number | undefined {
 // ═══════════════════════════════════════════════════════════════════════
 
 export default function baseAgents(pi: ExtensionAPI) {
-	const globalKey = "__pi_vs_cc_base_agents_loaded__";
-	if ((globalThis as Record<string, unknown>)[globalKey]) return;
-	(globalThis as Record<string, unknown>)[globalKey] = true;
-
+	// Re-register on every runtime/session recreation. Avoid one-time global guards here:
+	// Pi 0.65+ may rebuild the extension runtime on /new, /resume, /fork, and /reload.
 	const rawTools = process.env.PI_AGENT_ALLOWED_TOOLS;
 	const allowedTools = rawTools ? new Set(rawTools.split(",").map(t => t.trim()).filter(Boolean)) : null;
 
@@ -452,7 +517,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 	const completionWaiters = new Set<{
 		ids: Set<number>;
 		mode: "any" | "all";
-		resolve: (text: string) => void;
+		resolve: (result: { completedIds: number[] }) => void;
 	}>();
 	let activeCtx: ExtensionContext | undefined;
 	let modelTiers: ModelTiers | null = null;
@@ -517,16 +582,13 @@ export default function baseAgents(pi: ExtensionAPI) {
 				const finishedId = Array.from(waiter.ids).find((id) => agents.get(id)?.status !== "running");
 				if (finishedId !== undefined) {
 					completionWaiters.delete(waiter);
-					waiter.resolve(describeCompletedAgent(finishedId) ?? `Agent #${finishedId} has finished.`);
+					waiter.resolve({ completedIds: [finishedId] });
 				}
 			} else {
-				const allDone = Array.from(waiter.ids).every((id) => agents.get(id)?.status !== "running");
-				if (allDone) {
-					const lines = Array.from(waiter.ids)
-						.map((id) => `#${id} ${agents.get(id)?.status.toUpperCase() ?? "UNKNOWN"}`)
-						.join("\n");
+				const completedIds = Array.from(waiter.ids).filter((id) => agents.get(id)?.status !== "running");
+				if (completedIds.length === waiter.ids.size) {
 					completionWaiters.delete(waiter);
-					waiter.resolve(`All specified agents have finished:\n${lines}`);
+					waiter.resolve({ completedIds });
 				}
 			}
 		}
@@ -544,6 +606,194 @@ export default function baseAgents(pi: ExtensionAPI) {
 		const file = path.resolve(dir, `agent-${agentId}-${Date.now()}.txt`);
 		writeFileSync(file, text, "utf-8");
 		return file;
+	}
+
+	function resolveWaitTargetIds(ids?: number[]): number[] {
+		return ids && ids.length > 0
+			? ids
+			: Array.from(agents.values()).filter((agent) => agent.status === "running").map((agent) => agent.id);
+	}
+
+	function findMissingAgentIds(ids: number[]): number[] {
+		return ids.filter((id) => !agents.has(id));
+	}
+
+	async function waitForAgents(
+		targetIds: number[],
+		mode: "any" | "all",
+		signal?: AbortSignal,
+		timeoutMs = AGENT_JOIN_TIMEOUT_MS,
+	): Promise<{ status: "done" | "timeout" | "cancelled"; completedIds: number[] }> {
+		if (targetIds.length === 0) return { status: "done", completedIds: [] };
+
+		const immediateCompleted = targetIds.filter((id) => agents.get(id)?.status !== "running");
+		if ((mode === "any" && immediateCompleted.length > 0) || (mode === "all" && immediateCompleted.length === targetIds.length)) {
+			return { status: "done", completedIds: mode === "any" ? [immediateCompleted[0]] : immediateCompleted };
+		}
+
+		return await new Promise((resolve) => {
+			let timeoutId: ReturnType<typeof setTimeout>;
+			const waiter = {
+				ids: new Set(targetIds),
+				mode,
+				resolve: ({ completedIds }: { completedIds: number[] }) => {
+					clearTimeout(timeoutId);
+					resolve({ status: "done", completedIds });
+				},
+			};
+			completionWaiters.add(waiter);
+			timeoutId = setTimeout(() => {
+				completionWaiters.delete(waiter);
+				resolve({ status: "timeout", completedIds: [] });
+			}, timeoutMs);
+			signal?.addEventListener("abort", () => {
+				clearTimeout(timeoutId);
+				completionWaiters.delete(waiter);
+				resolve({ status: "cancelled", completedIds: [] });
+			}, { once: true });
+		});
+	}
+
+	function finalizeJoinSuccess(
+		state: SubAgentState,
+		params: { format?: "summary only" | "full output"; artifact?: boolean },
+		ctx: ExtensionContext,
+	): { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> } {
+		const key = runKey(state.id, state.runSeq);
+		const completion = readCompletionEnvelope(state.sessionFile, state.runSeq);
+		let resultText = completion?.finalText || state.lastAssistantText;
+
+		if (!resultText && state.sessionFile) {
+			const terminal = extractTerminalResultFromFile(state.sessionFile);
+			if (terminal.kind === "text") resultText = terminal.text || "";
+			else if (terminal.kind === "error") resultText = `Agent finished without final answer.\nError: ${terminal.error}`;
+			else if (terminal.kind === "tool-only") resultText = `Agent finished task via tools but produced no final text summary. Check the session (/aenter ${state.id}) for details.`;
+		}
+
+		if (!resultText) {
+			if (completion?.outcome === "tool-only") {
+				resultText = `Agent finished task via tools but produced no final text summary. Check the session (/aenter ${state.id}) for details.`;
+			} else if (completion?.outcome === "interrupted") {
+				resultText = `Agent was interrupted before producing a final text summary.`;
+			} else {
+				resultText = state.sessionFile
+					? `(agent produced no text output; use /aenter ${state.id} to view conversation)`
+					: "(agent produced no text output)";
+			}
+		}
+
+		const isAutoArtifact = resultText.length > MAX_FULL_OUTPUT;
+		const shouldPersist = params.artifact || isAutoArtifact;
+		const previewFormat = shouldPersist && !params.format ? "summary only" : params.format;
+		const formatted = formatAgentOutputDetailed(resultText, previewFormat);
+		const artifactPath = shouldPersist ? persistAgentArtifact(ctx.cwd || process.cwd(), state.id, resultText) : undefined;
+
+		state.resultJoined = true;
+		joinedRuns.add(key);
+		return {
+			content: [{
+				type: "text",
+				text: artifactPath
+					? `${formatted.text}\n\n${formatted.truncated ? "Output truncated." : ""} Full output saved to:\n${artifactPath}`
+					: formatted.text,
+			}],
+			details: {
+				format: previewFormat,
+				summary: completion?.finalText
+					? completion.finalText.split("\n\n")[0]?.slice(0, 200)
+					: state.lastAssistantText
+						? state.lastAssistantText.split("\n\n")[0]?.slice(0, 200)
+						: resultText.split("\n\n")[0]?.slice(0, 200),
+				status: completion?.status ?? state.status,
+				turnCount: completion?.turnCount ?? state.turnCount,
+				toolCount: completion?.toolCount ?? state.toolCount,
+				truncated: formatted.truncated,
+				originalLength: formatted.originalLength,
+				sessionFile: state.sessionFile,
+				completionFile: completion ? state.completionFile ?? undefined : undefined,
+				completionOutcome: completion?.outcome,
+				completionExitCode: completion?.exitCode,
+				artifact: Boolean(artifactPath),
+				artifactPath,
+				fullOutputPath: artifactPath,
+				autoArtifact: isAutoArtifact,
+			},
+		};
+	}
+
+	function finalizeJoinResult(
+		state: SubAgentState,
+		params: { format?: "summary only" | "full output"; artifact?: boolean },
+		ctx: ExtensionContext,
+	): { content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown>; isError?: boolean } {
+		const completion = readCompletionEnvelope(state.sessionFile, state.runSeq);
+		if (state.timedOut) {
+			return {
+				content: [{ type: "text", text: `Agent #${state.id} timed out (exceeded 15 minute limit).` }],
+				isError: true,
+			};
+		}
+		if (state.killed) {
+			return {
+				content: [{ type: "text", text: `Agent #${state.id} was killed before completing.` }],
+				isError: true,
+			};
+		}
+		if (state.status === "running") {
+			return {
+				content: [{ type: "text", text: `Agent #${state.id} is still running.` }],
+				isError: true,
+			};
+		}
+		if ((completion?.status ?? state.status) === "error") {
+			const errDetails = state.stderrLines.length > 0
+				? `\n\nStderr:\n${state.stderrLines.join("\n")}`
+				: "";
+			const completionErr = completion?.lastError ? `\n\nLast API/Model error: ${completion.lastError}` : "";
+			const lastErr = completionErr || (state.lastErrorMessage ? `\n\nLast API/Model error: ${state.lastErrorMessage}` : "");
+			return {
+				content: [{
+					type: "text",
+					text: `Agent #${state.id} finished with an error.${lastErr}${errDetails}${(completion?.finalText || state.lastAssistantText) ? `\n\nPartial output:\n${completion?.finalText || state.lastAssistantText}` : ""}`,
+				}],
+				details: {
+					runSeq: completion?.runSeq ?? state.runSeq,
+					completionOutcome: completion?.outcome,
+					completionExitCode: completion?.exitCode,
+					completionFile: state.completionFile,
+					sessionFile: state.sessionFile,
+				},
+				isError: true,
+			};
+		}
+		const result = finalizeJoinSuccess(state, params, ctx);
+		result.details.runSeq = completion?.runSeq ?? state.runSeq;
+		return result;
+	}
+
+	function joinMultipleAgents(
+		completedIds: number[],
+		params: { format?: "summary only" | "full output"; artifact?: boolean },
+		ctx: ExtensionContext,
+	): { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown>; isError?: boolean } {
+		const results = completedIds
+			.map((id) => agents.get(id))
+			.filter((state): state is SubAgentState => Boolean(state))
+			.map((state) => ({ id: state.id, result: finalizeJoinResult(state, params, ctx) }));
+		const hasError = results.some(({ result }) => result.isError === true);
+		const text = results.map(({ id, result }) => {
+			const body = result.content[0]?.text ?? "";
+			return `#${id}\n${body}`;
+		}).join("\n\n");
+		return {
+			content: [{ type: "text", text }],
+			details: {
+				joinedIds: results.map(({ id }) => id),
+				count: results.length,
+				format: params.format,
+			},
+			...(hasError ? { isError: true } : {}),
+		};
 	}
 
 	// Single shared timer — all agents updated simultaneously.
@@ -649,15 +899,16 @@ export default function baseAgents(pi: ExtensionAPI) {
 		const cwd = activeCtx?.cwd || process.cwd();
 		const extensions = resolveExtensions(toolList, import.meta.url);
 
+		const phaseGuidance = buildPhaseGuidance(state.phase);
 		const proc = spawnPiProcess({
-			task: state.task,
+			task: `${phaseGuidance}${phaseGuidance ? "\n\n" : ""}${state.task}`,
 			sessionFile: state.sessionFile,
 			toolList,
 			extensions,
 			model,
 			cwd,
 			isContinuation: state.turnCount > 1,
-			extraEnv: { PI_AGENT_ALLOWED_TOOLS: toolList.join(",") }
+			extraEnv: buildAllowedToolsEnv(toolList)
 		});
 
 		state.proc = proc;
@@ -741,6 +992,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 			
 			state.lastActivityAt = Date.now();
 			state.proc = undefined;
+			state.completionFile = persistCompletionEnvelope(state, code ?? null);
 			updateAllWidgets();
 			settleCompletionWaiters();
 			onComplete?.();
@@ -814,83 +1066,88 @@ export default function baseAgents(pi: ExtensionAPI) {
 	if (isAllowed("agent_wait_any")) pi.registerTool({
 		name: "agent_wait_any",
 		label: "Wait for Any Agent",
-		description: "Wait until ANY of the specified agents finish. Returns immediately if one is already done. Optional: ids (number[]).",
+		description: "Wait until ANY of the specified agents finish. Returns immediately if one is already done. Set join=true to return the completed result directly.",
 		parameters: AgentWaitParams,
-		async execute(_id, params, signal) {
-			const targetIds = params.ids && params.ids.length > 0
-				? params.ids
-				: Array.from(agents.values()).filter(a => a.status === "running").map(a => a.id);
-
+		async execute(_id, params, signal, _onUpdate, ctx) {
+			const targetIds = resolveWaitTargetIds(params.ids);
 			if (targetIds.length === 0) {
 				return { content: [{ type: "text", text: "No running agents to wait for." }] };
 			}
+			const missingIds = findMissingAgentIds(targetIds);
+			if (missingIds.length > 0) {
+				return { content: [{ type: "text", text: `Error: Unknown agent id(s): ${missingIds.join(", ")}. Use agent_list to inspect active agents.` }], isError: true };
+			}
 
-			const immediate = targetIds.map((id) => describeCompletedAgent(id)).find(Boolean);
-			if (immediate) return { content: [{ type: "text", text: immediate }] };
+			const waitResult = await waitForAgents(targetIds, "any", signal, params.timeoutMs || AGENT_JOIN_TIMEOUT_MS);
+			if (waitResult.status === "cancelled") {
+				return { content: [{ type: "text", text: "Wait cancelled by user." }], isError: true };
+			}
+			if (waitResult.status === "timeout") {
+				return { content: [{ type: "text", text: "Wait timed out." }], isError: true };
+			}
+			if (params.join) {
+				for (const id of waitResult.completedIds) joinWaiters.add(runKey(id, agents.get(id)?.runSeq ?? 0));
+				try {
+					return joinMultipleAgents(waitResult.completedIds, { format: params.format, artifact: params.artifact }, ctx);
+				} finally {
+					for (const id of waitResult.completedIds) {
+						const key = runKey(id, agents.get(id)?.runSeq ?? 0);
+						joinWaiters.delete(key);
+						const tid = pendingNotifications.get(key);
+						if (tid !== undefined) {
+							clearTimeout(tid);
+							pendingNotifications.delete(key);
+						}
+					}
+				}
+			}
 
-			const timeoutMs = params.timeoutMs || AGENT_JOIN_TIMEOUT_MS;
-			const output = await new Promise<string>((resolve) => {
-				const waiter = { ids: new Set(targetIds), mode: "any" as const, resolve };
-				completionWaiters.add(waiter);
-				const timeout = setTimeout(() => {
-					completionWaiters.delete(waiter);
-					resolve("Wait timed out.");
-				}, timeoutMs);
-				signal?.addEventListener("abort", () => {
-					clearTimeout(timeout);
-					completionWaiters.delete(waiter);
-					resolve("Wait cancelled by user.");
-				}, { once: true });
-				const originalResolve = resolve;
-				waiter.resolve = (text: string) => {
-					clearTimeout(timeout);
-					originalResolve(text);
-				};
-			});
-			return { content: [{ type: "text", text: output }] };
+			const text = waitResult.completedIds.map((id) => describeCompletedAgent(id) ?? `Agent #${id} has finished.`).join("\n");
+			return { content: [{ type: "text", text }] };
 		},
 	});
 
 	if (isAllowed("agent_wait_all")) pi.registerTool({
 		name: "agent_wait_all",
 		label: "Wait for All Agents",
-		description: "Wait until ALL specified agents finish. Optional: ids (number[]).",
+		description: "Wait until ALL specified agents finish. Set join=true to return joined results in one step.",
 		parameters: AgentWaitParams,
-		async execute(_id, params, signal) {
-			const targetIds = params.ids && params.ids.length > 0
-				? params.ids
-				: Array.from(agents.values()).filter(a => a.status === "running").map(a => a.id);
-
+		async execute(_id, params, signal, _onUpdate, ctx) {
+			const targetIds = resolveWaitTargetIds(params.ids);
 			if (targetIds.length === 0) {
 				return { content: [{ type: "text", text: "No running agents to wait for." }] };
 			}
-
-			const alreadyDone = targetIds.every((id) => agents.get(id)?.status !== "running");
-			if (alreadyDone) {
-				const lines = targetIds.map((id) => `#${id} ${agents.get(id)?.status.toUpperCase() ?? "UNKNOWN"}`).join("\n");
-				return { content: [{ type: "text", text: `All specified agents have finished:\n${lines}` }] };
+			const missingIds = findMissingAgentIds(targetIds);
+			if (missingIds.length > 0) {
+				return { content: [{ type: "text", text: `Error: Unknown agent id(s): ${missingIds.join(", ")}. Use agent_list to inspect active agents.` }], isError: true };
 			}
 
-			const timeoutMs = params.timeoutMs || AGENT_JOIN_TIMEOUT_MS;
-			const output = await new Promise<string>((resolve) => {
-				const waiter = { ids: new Set(targetIds), mode: "all" as const, resolve };
-				completionWaiters.add(waiter);
-				const timeout = setTimeout(() => {
-					completionWaiters.delete(waiter);
-					resolve("Wait timed out.");
-				}, timeoutMs);
-				signal?.addEventListener("abort", () => {
-					clearTimeout(timeout);
-					completionWaiters.delete(waiter);
-					resolve("Wait cancelled by user.");
-				}, { once: true });
-				const originalResolve = resolve;
-				waiter.resolve = (text: string) => {
-					clearTimeout(timeout);
-					originalResolve(text);
-				};
-			});
-			return { content: [{ type: "text", text: output }] };
+			const waitResult = await waitForAgents(targetIds, "all", signal, params.timeoutMs || AGENT_JOIN_TIMEOUT_MS);
+			if (waitResult.status === "cancelled") {
+				return { content: [{ type: "text", text: "Wait cancelled by user." }], isError: true };
+			}
+			if (waitResult.status === "timeout") {
+				return { content: [{ type: "text", text: "Wait timed out." }], isError: true };
+			}
+			if (params.join) {
+				for (const id of waitResult.completedIds) joinWaiters.add(runKey(id, agents.get(id)?.runSeq ?? 0));
+				try {
+					return joinMultipleAgents(waitResult.completedIds, { format: params.format, artifact: params.artifact }, ctx);
+				} finally {
+					for (const id of waitResult.completedIds) {
+						const key = runKey(id, agents.get(id)?.runSeq ?? 0);
+						joinWaiters.delete(key);
+						const tid = pendingNotifications.get(key);
+						if (tid !== undefined) {
+							clearTimeout(tid);
+							pendingNotifications.delete(key);
+						}
+					}
+				}
+			}
+
+			const lines = waitResult.completedIds.map((id) => `#${id} ${agents.get(id)?.status.toUpperCase() ?? "UNKNOWN"}`).join("\n");
+			return { content: [{ type: "text", text: `All specified agents have finished:\n${lines}` }] };
 		},
 	});
 
@@ -901,18 +1158,46 @@ export default function baseAgents(pi: ExtensionAPI) {
 		parameters: AgentSpawnParams,
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			activeCtx = ctx;
+			const delegation = validateDelegationPrompt({ text: params.task, tags: params.tags, mode: "spawn" });
+			if (!delegation.ok) {
+				return {
+					content: [{ type: "text", text: delegation.errors.join("\n") }],
+					isError: true,
+					details: { warnings: delegation.warnings },
+				};
+			}
 			const cwd = ctx.cwd || process.cwd();
 			const id = nextAgentId();
 			const toolList = resolveToolsParam(params.tags);
 			const parentModel = currentModelString(ctx.model);
 			const model = resolveModel({ model: params.model, tier: params.tier, tiers: modelTiers, fallback: parentModel });
 			const resolvedTier = params.tier ?? reverseLookupTier(model ?? "", modelTiers);
+			const phase = normalizePhase(params.phase);
+			let spawnMode = normalizeSpawnMode(params.mode);
+			const forkContextMode = normalizeForkContextMode(params.context);
+			const phaseWarnings: string[] = [];
+			if (spawnMode === "fork" && forkContextMode === "none") {
+				spawnMode = "fresh";
+				phaseWarnings.push("Fork mode requested without context=recent; downgraded to fresh mode.");
+			}
+			if (spawnMode === "fork" && (params.contextTurns ?? 6) < 2) {
+				phaseWarnings.push("Fork mode with fewer than 2 turns may provide too little context.");
+			}
+			const forkContext = buildForkContextPrompt(ctx, {
+				mode: spawnMode,
+				contextMode: forkContextMode,
+				turns: params.contextTurns,
+				maxChars: params.contextMaxChars,
+			});
+			const effectiveTask = forkContext
+				? `${forkContext}\n## Delegated task\n${params.task}`
+				: params.task;
 			const state: SubAgentState = {
 				id,
 				name: params.name || `agent-${id}`,
 				status: "running",
 				resultJoined: false,
-				task: params.task,
+				task: effectiveTask,
 				lastAssistantText: "",
 				lastErrorMessage: "",
 				currentStreamText: "",
@@ -931,15 +1216,25 @@ export default function baseAgents(pi: ExtensionAPI) {
 				runSeq: 1,
 				notifyMode: params.notify || "ui",
 				lastActivityAt: Date.now(),
+				completionFile: undefined,
+				phase,
+				spawnMode,
+				forkContextMode,
 			};
 			agents.set(id, state);
 
 			runAgent(state, toolList, model);
 			updateAllWidgets();
 
-			const metaParts = formatAgentMetaBracketed({ tier: resolvedTier, model, tags: params.tags });
-			const output = `Agent #${id} [${state.name}]${metaParts ? ` ${metaParts}` : ""} spawned. Use agent_join(${id}) for result.`;
-			return { content: [{ type: "text", text: output }], details: { format: params.format } };
+			const metaParts = formatAgentMetaBracketed({ tier: resolvedTier, model, tags: params.tags, phase, spawnMode, forkContextMode });
+			const allWarnings = [...delegation.warnings, ...phaseWarnings];
+			const warningSuffix = allWarnings.length > 0
+				? `\nWarnings:\n- ${allWarnings.join("\n- ")}`
+				: "";
+			const phaseSuffix = phase ? `\nPhase: ${phase}` : "";
+			const modeSuffix = spawnMode === "fork" ? `\nSpawn mode: fork (${forkContextMode})` : "";
+			const output = `Agent #${id} [${state.name}]${metaParts ? ` ${metaParts}` : ""} spawned. Use agent_join(${id}) for result.${phaseSuffix}${modeSuffix}${warningSuffix}`;
+			return { content: [{ type: "text", text: output }], details: { format: params.format, warnings: allWarnings, phase, spawnMode, forkContextMode } };
 		},
 	});
 
@@ -957,40 +1252,17 @@ export default function baseAgents(pi: ExtensionAPI) {
 				};
 			}
 
-			const currentRunSeq = state.runSeq;
-			const key = runKey(state.id, currentRunSeq);
-
-			if (state.timedOut) {
-				return {
-					content: [{ type: "text", text: `Agent #${params.id} timed out (exceeded 15 minute limit).` }],
-					isError: true,
-				};
-			}
-			if (state.killed) {
-				return {
-					content: [{ type: "text", text: `Agent #${params.id} was killed before completing.` }],
-					isError: true,
-				};
-			}
-
+			const key = runKey(state.id, state.runSeq);
 			joinWaiters.add(key);
 			try {
-				const deadline = Date.now() + AGENT_JOIN_TIMEOUT_MS;
-
-				while (state.status === "running" && !signal?.aborted && Date.now() < deadline) {
-					await new Promise<void>((resolve) => {
-						const t = setTimeout(resolve, AGENT_JOIN_POLL_INTERVAL_MS);
-						signal?.addEventListener("abort", () => { clearTimeout(t); resolve(); }, { once: true });
-					});
-				}
-
-				if (signal?.aborted) {
+				const waitResult = await waitForAgents([params.id], "all", signal, AGENT_JOIN_TIMEOUT_MS);
+				if (waitResult.status === "cancelled") {
 					return {
 						content: [{ type: "text", text: `agent_join cancelled by user (Escape pressed). Agent #${params.id} is still running.` }],
 						isError: true,
 					};
 				}
-				if (state.status === "running") {
+				if (waitResult.status === "timeout") {
 					if (state.proc) {
 						killProcess(state.proc);
 						scheduleForceKill(state.proc);
@@ -1000,76 +1272,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 						isError: true,
 					};
 				}
-				if (state.status === "error") {
-					const errDetails = state.stderrLines.length > 0
-						? `\n\nStderr:\n${state.stderrLines.join("\n")}`
-						: "";
-					const lastErr = state.lastErrorMessage ? `\n\nLast API/Model error: ${state.lastErrorMessage}` : "";
-					return {
-						content: [{
-							type: "text",
-							text: `Agent #${params.id} finished with an error.${lastErr}${errDetails}${state.lastAssistantText ? `\n\nPartial output:\n${state.lastAssistantText}` : ""}`,
-						}],
-						isError: true,
-					};
-				}
-
-				// ── Success branch: Extract result ──
-
-				// 1. Try in-memory state (fastest)
-				let resultText = state.lastAssistantText;
-
-				// 2. Fallback to structured session extraction
-				if (!resultText && state.sessionFile) {
-					const terminal = extractTerminalResultFromFile(state.sessionFile);
-					if (terminal.kind === "text") {
-						resultText = terminal.text || "";
-					} else if (terminal.kind === "error") {
-						resultText = `Agent finished without final answer.\nError: ${terminal.error}`;
-					} else if (terminal.kind === "tool-only") {
-						resultText = `Agent finished task via tools but produced no final text summary. Check the session (/aenter ${state.id}) for details.`;
-					}
-				}
-
-				// If still empty
-				if (!resultText) {
-					resultText = state.sessionFile
-						? "(agent produced no text output; use /aenter " + state.id + " to view conversation)"
-						: "(agent produced no text output)";
-				}
-
-				const isAutoArtifact = resultText.length > MAX_FULL_OUTPUT;
-				const shouldPersist = params.artifact || isAutoArtifact;
-				const previewFormat = shouldPersist && !params.format ? "summary only" : params.format;
-				const formatted = formatAgentOutputDetailed(resultText, previewFormat);
-				const artifactPath = shouldPersist ? persistAgentArtifact(ctx.cwd || process.cwd(), state.id, resultText) : undefined;
-
-				state.resultJoined = true;
-				joinedRuns.add(key);
-				return {
-					content: [{
-						type: "text",
-						text: artifactPath
-							? `${formatted.text}\n\n${formatted.truncated ? "Output truncated." : ""} Full output saved to:\n${artifactPath}`
-							: formatted.text,
-					}],
-					details: {
-						format: previewFormat,
-						summary: state.lastAssistantText
-							? state.lastAssistantText.split("\n\n")[0]?.slice(0, 200)
-							: resultText.split("\n\n")[0]?.slice(0, 200),
-						status: state.status,
-						turnCount: state.turnCount,
-						toolCount: state.toolCount,
-						truncated: formatted.truncated,
-						originalLength: formatted.originalLength,
-						sessionFile: state.sessionFile,
-						artifact: Boolean(artifactPath),
-						artifactPath,
-						fullOutputPath: artifactPath,
-						autoArtifact: isAutoArtifact,
-					},
-				};
+				return finalizeJoinResult(state, { format: params.format, artifact: params.artifact }, ctx);
 			} finally {
 				joinWaiters.delete(key);
 				const tid = pendingNotifications.get(key);
@@ -1081,6 +1284,72 @@ export default function baseAgents(pi: ExtensionAPI) {
 		},
 	});
 
+	if (isAllowed("agent_result")) pi.registerTool({
+		name: "agent_result",
+		label: "Get Agent Result",
+		description: "Read the completion result of a finished sub-agent without waiting. Use this after agent_join or when agent_list shows a finished agent. Optionally target a specific runSeq.",
+		parameters: AgentResultParams,
+		async execute(_id, params, _signal, _onUpdate, ctx) {
+			const state = agents.get(params.id);
+			if (!state) {
+				return {
+					content: [{ type: "text", text: `Error: No agent with id ${params.id}. Use agent_list to see active agents.` }],
+					isError: true,
+				};
+			}
+			if (state.status === "running") {
+				return {
+					content: [{ type: "text", text: `Agent #${params.id} is still running. Wait for it to finish before requesting agent_result.` }],
+					isError: true,
+				};
+			}
+			const targetRunSeq = params.runSeq ?? state.runSeq;
+			const completion = readCompletionEnvelope(state.sessionFile, targetRunSeq);
+			if (!completion) {
+				return finalizeJoinResult(state, { format: params.format, artifact: params.artifact }, ctx);
+			}
+
+			let resultText = completion.finalText;
+			if (!resultText) {
+				if (completion.outcome === "tool-only") resultText = `Agent finished task via tools but produced no final text summary. Check the session (/aenter ${state.id}) for details.`;
+				else if (completion.outcome === "interrupted") resultText = `Agent was interrupted before producing a final text summary.`;
+				else if (completion.outcome === "error") resultText = completion.lastError ? `Agent finished with an error.\nError: ${completion.lastError}` : `Agent finished with an error.`;
+				else resultText = state.sessionFile ? `(agent produced no text output; use /aenter ${state.id} to view conversation)` : "(agent produced no text output)";
+			}
+
+			const isAutoArtifact = resultText.length > MAX_FULL_OUTPUT;
+			const shouldPersist = params.artifact || isAutoArtifact;
+			const previewFormat = shouldPersist && !params.format ? "summary only" : params.format;
+			const formatted = formatAgentOutputDetailed(resultText, previewFormat);
+			const artifactPath = shouldPersist ? persistAgentArtifact(ctx.cwd || process.cwd(), state.id, resultText) : undefined;
+			return {
+				content: [{
+					type: "text",
+					text: artifactPath
+						? `${formatted.text}\n\n${formatted.truncated ? "Output truncated." : ""} Full output saved to:\n${artifactPath}`
+						: formatted.text,
+				}],
+				details: {
+					format: previewFormat,
+					runSeq: completion.runSeq,
+					status: completion.status,
+					outcome: completion.outcome,
+					exitCode: completion.exitCode,
+					turnCount: completion.turnCount,
+					toolCount: completion.toolCount,
+					elapsedMs: completion.elapsedMs,
+					sessionFile: completion.sessionFile,
+					completionFile: state.completionFile,
+					artifact: Boolean(artifactPath),
+					artifactPath,
+					fullOutputPath: artifactPath,
+					autoArtifact: isAutoArtifact,
+				},
+				isError: completion.status === "error",
+			};
+		},
+	});
+
 	if (isAllowed("agent_continue")) pi.registerTool({
 		name: "agent_continue",
 		label: "Continue Agent",
@@ -1088,6 +1357,14 @@ export default function baseAgents(pi: ExtensionAPI) {
 		parameters: AgentContinueParams,
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			activeCtx = ctx;
+			const delegation = validateDelegationPrompt({ text: params.prompt, tags: params.tags, mode: "continue" });
+			if (!delegation.ok) {
+				return {
+					content: [{ type: "text", text: delegation.errors.join("\n") }],
+					isError: true,
+					details: { warnings: delegation.warnings },
+				};
+			}
 			const state = agents.get(params.id);
 			if (!state) {
 				return {
@@ -1115,6 +1392,9 @@ export default function baseAgents(pi: ExtensionAPI) {
 			}
 
 			beginAgentRun(state, params.prompt, params.notify);
+			const requestedPhase = normalizePhase(params.phase);
+			const phaseValidation = validatePhaseTransition(state.phase, requestedPhase);
+			state.phase = requestedPhase ?? state.phase;
 
 			const toolList = params.tags
 				? resolveToolsParam(params.tags)
@@ -1133,9 +1413,14 @@ export default function baseAgents(pi: ExtensionAPI) {
 
 			runAgent(state, toolList, model);
 
-			const metaParts = formatAgentMetaBracketed({ tier: state.tier, model, tags: state.tags });
-			const output = `Agent #${params.id} [${state.name}]${metaParts ? ` ${metaParts}` : ""} continuing (Turn ${state.turnCount}). Use agent_join(${params.id}) for result.`;
-			return { content: [{ type: "text", text: output }], details: { format: params.format } };
+			const metaParts = formatAgentMetaBracketed({ tier: state.tier, model, tags: state.tags, phase: state.phase, spawnMode: state.spawnMode, forkContextMode: state.forkContextMode });
+			const allWarnings = [...delegation.warnings, ...phaseValidation.warnings];
+			const warningSuffix = allWarnings.length > 0
+				? `\nWarnings:\n- ${allWarnings.join("\n- ")}`
+				: "";
+			const phaseSuffix = state.phase ? `\nPhase: ${state.phase}` : "";
+			const output = `Agent #${params.id} [${state.name}]${metaParts ? ` ${metaParts}` : ""} continuing (Turn ${state.turnCount}). Use agent_join(${params.id}) for result.${phaseSuffix}${warningSuffix}`;
+			return { content: [{ type: "text", text: output }], details: { format: params.format, warnings: allWarnings, phase: state.phase } };
 		},
 	});
 
@@ -1458,7 +1743,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 
 	pi.on("before_agent_start", async (event) => {
 		// Main agent needs orchestration policy; restricted sub-agents do not.
-		if (process.env.PI_AGENT_ALLOWED_TOOLS) return undefined;
+		if (process.env[ALLOWED_TOOLS_ENV]) return undefined;
 		return {
 			systemPrompt: event.systemPrompt + "\n\n" + ORCHESTRATOR_GUIDANCE,
 		};

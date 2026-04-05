@@ -33,7 +33,9 @@ import {
 	resolveTagsToTools,
 	toolsNeedBaseAgents,
 	toolsNeedBaseTools,
+	validateTags,
 } from "./agent-tags.ts";
+import { buildAllowedToolsEnv } from "./allowed-tools.ts";
 
 // ── Constants ──────────────────────────────────────────────────────────
 
@@ -76,7 +78,10 @@ export function canonicalizeToolList(toolList: string[]): string[] {
 export function resolveToolsParam(tags?: string | string[]): string[] {
 	if (tags) {
 		const strTags = Array.isArray(tags) ? tags.join(",") : tags;
-		if (strTags.trim()) return canonicalizeToolList(resolveTagsToTools(strTags));
+		if (strTags.trim()) {
+			const { valid } = validateTags(strTags);
+			return canonicalizeToolList(resolveTagsToTools(valid.join(",")));
+		}
 	}
 	return canonicalizeToolList(resolveTagsToTools("Bash"));
 }
@@ -257,6 +262,7 @@ export function spawnPiProcess(opts: SpawnPiOptions): ChildProcess {
 		env: {
 			...process.env,
 			PI_CLI_PATH: piCli,
+			...buildAllowedToolsEnv(opts.toolList),
 			...opts.extraEnv,
 		},
 		shell: false,

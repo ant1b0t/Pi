@@ -19,8 +19,8 @@
 - [ ] `resolveTagsToTools("")` — Пустая строка возвращает BASE_TOOLS
 - [ ] `resolveTagsToTools("Bash")` — Добавляет bash, script_run
 - [ ] `resolveTagsToTools("Web")` — Добавляет web_fetch
-- [ ] `resolveTagsToTools("FS")` — Добавляет edit, write, apply_patch
-- [ ] `resolveTagsToTools("Agents")` — Добавляет agent_spawn, agent_join, agent_continue, agent_list
+- [ ] `resolveTagsToTools("Wr")` — Добавляет edit, write, apply_patch
+- [ ] `resolveTagsToTools("Agents")` — Добавляет agent_spawn, agent_join, agent_result, agent_continue, agent_list
 - [ ] `resolveTagsToTools("Task")` — Добавляет task
 - [ ] `resolveTagsToTools("UI")` — Добавляет ask_user, todo
 - [ ] `resolveTagsToTools("Wr,Web,Bash")` — Несколько тегов комбинируются
@@ -178,11 +178,18 @@
 - [ ] Агент не существует — Возвращает ошибку
 - [ ] Агент ещё работает — Возвращает ошибку
 - [ ] Сохраняет историю — Новый prompt добавляется к сессии
+- [ ] Предупреждает о нетипичном переходе фазы (например verification → verification или unusual flow)
 
-### 5.5 Инструмент `agent_kill`
+### 5.4a Инструмент `agent_result`
+- [ ] Читает completion результат завершённого агента без ожидания
+- [ ] Ошибка, если агент ещё работает
+- [ ] Может читать конкретный `runSeq`
+- [ ] Возвращает outcome/exitCode/turnCount/toolCount из completion envelope
+
+### 5.5 Команда `/akill`
 - [ ] Убивает работающего агента — Процесс завершается
-- [ ] Несуществующий ID — Возвращает ошибку
-- [ ] Уже завершённый агент — Возвращает success (idempotent)
+- [ ] Несуществующий ID — Показывает ошибку
+- [ ] Уже завершённый агент — Идемпотентна / безопасно сообщает состояние
 
 ### 5.6 Команда `/agents`
 - [ ] Показывает виджет со статусами — Виджет отображается
@@ -195,6 +202,11 @@
 ### 5.8 Команда `/aclear`
 - [ ] Удаляет завершённых агентов из UI — Виджеты пропадают
 - [ ] Не трогает работающих — running агенты остаются
+
+### 5.9 Runtime reload safety
+- [x] Удалён one-time global reload guard из `extensions/base/base-agents.ts`.
+- [x] Удалён one-time global reload guard из `extensions/provider-smartrouter.ts`.
+- [x] Добавлена проверка `just check-runtime-reload-guards` против регрессии для критичных runtime-sensitive extensions.
 
 ---
 
@@ -236,8 +248,27 @@
 ```
 1. agent_spawn(tags="Web", task="fetch example.com")
 2. Проверить: инструменты включают web_fetch
-3. agent_spawn(tags="FS", task="edit file")
+3. agent_spawn(tags="Wr", task="edit file")
 4. Проверить: инструменты включают edit, write
+```
+
+### 6.6 Phase-aware orchestration
+```
+1. agent_spawn(tags="Bash", task="inspect architecture", phase="research")
+2. agent_join(id=1)
+3. agent_continue(id=1, prompt="implement the chosen change", phase="implementation")
+4. agent_join(id=1)
+5. agent_continue(id=1, prompt="verify the result and list risks", phase="verification")
+6. agent_join(id=1)
+7. Проверить: ответы содержат phase metadata / warnings where appropriate
+```
+
+### 6.7 Fork context mode
+```
+1. Провести короткий диалог с главным агентом
+2. agent_spawn(task="summarize recent discussion", mode="fork", context="recent", contextTurns=4)
+3. agent_join(id=1)
+4. Проверить: sub-agent видел недавний контекст и использовал его в ответе
 ```
 
 ---

@@ -36,14 +36,14 @@ agent_list
 ### 3. Теги инструментов
 ```
 agent_spawn tags="Web" task="Fetch https://example.com" name="fetcher"
-agent_spawn tags="FS" task="List files in current dir" name="lister"
+agent_spawn tags="Wr" task="List files in current dir" name="lister"
 agent_list
 ```
 
 **Ожидаемый результат:**
 - Агенты создаются с разными наборами инструментов
 - Web: доступен web_fetch
-- FS: доступны edit, write
+- Wr: доступны edit, write
 
 ### 4. Продолжение диалога
 ```
@@ -88,6 +88,42 @@ agent_list
 /aclear
 ```
 
+### 7. Completion result без ожидания
+```
+agent_spawn tags="Bash" task="echo 'ready'" name="result-reader"
+agent_join id=1
+agent_result id=1
+```
+
+**Ожидаемый результат:**
+- `agent_result` возвращает completion envelope данные без нового ожидания
+- Видны status / runSeq / outcome
+
+### 8. Phase workflow
+```
+agent_spawn tags="Bash" task="Inspect the code and report findings" phase="research" name="phased"
+agent_join id=1
+agent_continue id=1 prompt="Implement the selected approach" phase="implementation"
+agent_join id=1
+agent_continue id=1 prompt="Verify the result and list risks" phase="verification"
+agent_join id=1
+```
+
+**Ожидаемый результат:**
+- Фаза видна в ответах `agent_spawn` / `agent_continue`
+- Нетипичный переход фазы даёт warning, но не ломает workflow
+
+### 9. Fork context
+```
+# Сначала обсудить задачу с главным агентом
+agent_spawn tags="Bash" task="Summarize the recent discussion" mode="fork" context="recent" contextTurns=4 name="forked"
+agent_join id=1
+```
+
+**Ожидаемый результат:**
+- Sub-agent видит recent parent context
+- В ответе spawn видно `Spawn mode: fork (recent)`
+
 ## Проверка файлов
 
 ```bash
@@ -127,7 +163,7 @@ pi -e extensions/base/base-agents.ts --no-extensions
 - [ ] `agent_list` показывает всех агентов со статусами
 - [ ] `agent_join` блокирует до завершения
 - [ ] `agent_continue` продолжает существующего агента
-- [ ] `agent_kill` завершает работающего агента
+- [ ] `/akill` завершает работающего агента
 - [ ] `/agents` показывает виджет
 - [ ] `/akill` убивает по ID
 - [ ] `/aclear` очищает завершённых
