@@ -1,11 +1,11 @@
 {
   "high": [
-    "openai-codex/gpt-5.4"
+    "smartrouter/openai-codex/gpt-5.4"
   ],
   "medium": [
-    "qwen/coder-model"
+    "smartrouter/qwen/coder-model"
   ],
   "low": [
-    "qwen/coder-model"
+    "smartrouter/qwen/coder-model"
   ]
 }
