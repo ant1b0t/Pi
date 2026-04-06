@@ -1,7 +1,7 @@
 // 📁 provider-smartrouter.ts — SmartRouter OpenAI-compatible provider for Pi.
-// 🎯 Core function: Load smartrouter.env layers, optional undici proxy, registerProvider.
-// 🔗 Key dependencies: @mariozechner/pi-coding-agent, node:fs/path/url/os/module, npm undici (optional).
-// 💡 Usage: .pi/extensions re-exports; run `npm install` / `bun install` in repo for proxy support.
+// 🎯 Core function: Load smartrouter.env, proxy-aware fetch with NO_PROXY, registerProvider.
+// 🔗 Key dependencies: @mariozechner/pi-coding-agent, node:fs/path/url/os/module, npm undici.
+// 💡 Usage: Re-exported from .pi/extensions; install deps at repo root; extend NO_PROXY as needed.
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { existsSync, readFileSync } from "node:fs";
@@ -10,7 +10,6 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Resolve `undici` by walking up from this file (Pi loads extensions outside default NODE_PATH). */
 function loadUndiciSync(): typeof import("undici") | null {
 	const req = createRequire(import.meta.url);
 	let dir = dirname(fileURLToPath(import.meta.url));
@@ -18,13 +17,47 @@ function loadUndiciSync(): typeof import("undici") | null {
 		try {
 			return req(req.resolve("undici", { paths: [dir] }));
 		} catch {
-			/* try parent */
+			/* walk to repo root */
 		}
 		const parent = dirname(dir);
 		if (parent === dir) break;
 		dir = parent;
 	}
 	return null;
+}
+
+function requestInfoToUrlString(info: RequestInfo): string {
+	if (typeof info === "string") return info;
+	if (info instanceof URL) return info.href;
+	return info.url;
+}
+
+/** Honor NO_PROXY / no_proxy when extension forces a ProxyAgent on global fetch. */
+function shouldBypassProxyForUrl(urlString: string): boolean {
+	const raw = String(process.env.NO_PROXY || process.env.no_proxy || "").trim();
+	if (!raw) return false;
+	let host: string;
+	let hostPort: string;
+	try {
+		const u = new URL(urlString, "http://placeholder.local");
+		host = u.hostname;
+		hostPort = u.port ? `${u.hostname}:${u.port}` : u.hostname;
+	} catch {
+		return false;
+	}
+	const patterns = raw.split(/[\s,]+/).map((p) => p.trim()).filter(Boolean);
+	const hLower = host.toLowerCase();
+	const hpLower = hostPort.toLowerCase();
+	for (const pattern of patterns) {
+		if (pattern === "*") return true;
+		const pLower = pattern.toLowerCase();
+		if (pLower === hLower || pLower === hpLower) return true;
+		if (pattern.startsWith("*.") && (hLower.endsWith(pattern.slice(1).toLowerCase()) || hLower === pattern.slice(2).toLowerCase())) {
+			return true;
+		}
+		if (pattern.startsWith(".") && hLower.endsWith(pattern.toLowerCase())) return true;
+	}
+	return false;
 }
 
 const SMARTROUTER_PROVIDER_ID = "smartrouter";
@@ -84,51 +117,6 @@ function loadSmartRouterEnvFile(): void {
 	}
 }
 
-function getSmartRouterProxyEnv(): Record<string, string> {
-	const proxyEnv: Record<string, string> = {};
-	for (const key of SMARTROUTER_PROXY_ENV_KEYS) {
-		const value = String(process.env[key] || "").trim();
-		if (value) proxyEnv[key] = value;
-	}
-	return proxyEnv;
-}
-
-function configureSmartRouterProxySupport(): Record<string, string> {
-	const globalKey = "__piSmartRouterProxyConfigSignature";
-	const proxyEnv = getSmartRouterProxyEnv();
-	const signature = JSON.stringify(proxyEnv);
-	const globalState = globalThis as Record<string, unknown>;
-
-	if (globalState[globalKey] === signature) {
-		return proxyEnv;
-	}
-
-	const undici = loadUndiciSync();
-	if (!undici) {
-		if (proxyEnv.ALL_PROXY || proxyEnv.HTTPS_PROXY || proxyEnv.HTTP_PROXY) {
-			console.warn(
-				"[SmartRouter] Proxy env vars are set but `undici` is missing. Run `npm install` or `bun install` in the Pi repo root.",
-			);
-		}
-		globalState[globalKey] = signature;
-		return proxyEnv;
-	}
-
-	const { EnvHttpProxyAgent, ProxyAgent, fetch: undiciFetch, setGlobalDispatcher } = undici;
-	const proxyUrl = proxyEnv.ALL_PROXY || proxyEnv.HTTPS_PROXY || proxyEnv.HTTP_PROXY || "";
-	if (proxyUrl) {
-		const dispatcher = new ProxyAgent(proxyUrl);
-		globalState.fetch = (url: string | URL | Request, init?: RequestInit) =>
-			undiciFetch(url, { ...init, dispatcher } as Parameters<typeof undiciFetch>[1]);
-		setGlobalDispatcher(dispatcher);
-	} else {
-		setGlobalDispatcher(new EnvHttpProxyAgent());
-	}
-
-	globalState[globalKey] = signature;
-	return proxyEnv;
-}
-
 interface SmartRouterModelSeed {
   id: string;
   name: string;
@@ -146,7 +134,8 @@ const SMARTROUTER_MODEL_SEEDS: SmartRouterModelSeed[] = [
 		id: "github-copilot/claude-haiku-4.5",
 		name: "Copilot · Claude Haiku 4.5",
 		reasoning: false,
-		contextWindow: 200000,
+		input: ["text", "image"],
+		contextWindow: 128000,
 		maxTokens: 16384,
 		compat: { supportsDeveloperRole: false },
 	},
@@ -154,7 +143,8 @@ const SMARTROUTER_MODEL_SEEDS: SmartRouterModelSeed[] = [
 		id: "github-copilot/claude-opus-4.6",
 		name: "Copilot · Claude Opus 4.6",
 		reasoning: true,
-		contextWindow: 200000,
+		input: ["text", "image"],
+		contextWindow: 128000,
 		maxTokens: 16384,
 		compat: { supportsDeveloperRole: false },
 	},
@@ -162,7 +152,8 @@ const SMARTROUTER_MODEL_SEEDS: SmartRouterModelSeed[] = [
 		id: "github-copilot/claude-sonnet-4.6",
 		name: "Copilot · Claude Sonnet 4.6",
 		reasoning: true,
-		contextWindow: 200000,
+		input: ["text", "image"],
+		contextWindow: 128000,
 		maxTokens: 16384,
 		compat: { supportsDeveloperRole: false },
 	},
@@ -194,6 +185,7 @@ const SMARTROUTER_MODEL_SEEDS: SmartRouterModelSeed[] = [
 		id: "github-copilot/gpt-4.1",
 		name: "Copilot · GPT 4.1",
 		reasoning: false,
+		input: ["text", "image"],
 		contextWindow: 1048576,
 		maxTokens: 32768,
 	},
@@ -209,6 +201,7 @@ const SMARTROUTER_MODEL_SEEDS: SmartRouterModelSeed[] = [
 		id: "github-copilot/gpt-5-mini",
 		name: "Copilot · GPT 5 mini",
 		reasoning: false,
+		input: ["text", "image"],
 		contextWindow: 262144,
 		maxTokens: 32768,
 	},
@@ -216,6 +209,7 @@ const SMARTROUTER_MODEL_SEEDS: SmartRouterModelSeed[] = [
 		id: "github-copilot/gpt-5.3-codex",
 		name: "Copilot · GPT 5.3 Codex",
 		reasoning: true,
+		input: ["text", "image"],
 		contextWindow: 262144,
 		maxTokens: 32768,
 	},
@@ -223,6 +217,7 @@ const SMARTROUTER_MODEL_SEEDS: SmartRouterModelSeed[] = [
 		id: "github-copilot/gpt-5.4",
 		name: "Copilot · GPT 5.4",
 		reasoning: true,
+		input: ["text", "image"],
 		contextWindow: 262144,
 		maxTokens: 32768,
 	},
@@ -230,6 +225,7 @@ const SMARTROUTER_MODEL_SEEDS: SmartRouterModelSeed[] = [
 		id: "github-copilot/gpt-5.4-mini",
 		name: "Copilot · GPT 5.4 mini",
 		reasoning: false,
+		input: ["text", "image"],
 		contextWindow: 262144,
 		maxTokens: 32768,
 	},
@@ -245,35 +241,40 @@ const SMARTROUTER_MODEL_SEEDS: SmartRouterModelSeed[] = [
 		id: "openai-codex/gpt-5.1-codex-mini",
 		name: "Codex · GPT 5.1 Codex mini",
 		reasoning: false,
-		contextWindow: 262144,
-		maxTokens: 32768,
+		input: ["text", "image"],
+		contextWindow: 272000,
+		maxTokens: 128000,
 	},
 	{
 		id: "openai-codex/gpt-5.3-codex",
 		name: "Codex · GPT 5.3 Codex",
 		reasoning: true,
-		contextWindow: 262144,
-		maxTokens: 32768,
+		input: ["text", "image"],
+		contextWindow: 272000,
+		maxTokens: 128000,
 	},
 	{
 		id: "openai-codex/gpt-5.4",
 		name: "Codex · GPT 5.4",
 		reasoning: true,
-		contextWindow: 262144,
-		maxTokens: 32768,
+		input: ["text", "image"],
+		contextWindow: 1050000,
+		maxTokens: 128000,
 	},
 	{
 		id: "openai-codex/gpt-5.4-mini",
 		name: "Codex · GPT 5.4 mini",
 		reasoning: false,
-		contextWindow: 262144,
-		maxTokens: 32768,
+		input: ["text", "image"],
+		contextWindow: 272000,
+		maxTokens: 128000,
 	},
 	// * Qwen
 	{
 		id: "qwen/coder-model",
 		name: "Qwen · Coder model",
 		reasoning: false,
+		input: ["text", "image"],
 		contextWindow: 1048576,
 		maxTokens: 65536,
 	},
@@ -311,6 +312,57 @@ function getSmartRouterApiKey(): string {
 
 function getSmartRouterAdminToken(): string {
   return String(process.env[SMARTROUTER_ADMIN_TOKEN_ENV] || "").trim();
+}
+
+function getSmartRouterProxyEnv(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of SMARTROUTER_PROXY_ENV_KEYS) {
+    const value = String(process.env[key] || "").trim();
+    if (value) out[key] = value;
+  }
+  return out;
+}
+
+function configureSmartRouterProxySupport(): Record<string, string> {
+  const proxyEnv = getSmartRouterProxyEnv();
+  const signature = JSON.stringify(proxyEnv);
+  const globalKey = "__pi_vs_cc_smartrouter_proxy_signature__";
+  if ((globalThis as Record<string, unknown>)[globalKey] === signature) return proxyEnv;
+  (globalThis as Record<string, unknown>)[globalKey] = signature;
+
+  const undici = loadUndiciSync();
+  if (!undici) {
+    if (proxyEnv["ALL_PROXY"] || proxyEnv["HTTPS_PROXY"] || proxyEnv["HTTP_PROXY"]) {
+      console.warn(
+        "[SmartRouter] Proxy env is set but `undici` is missing. Run `npm install` or `bun install` in the Pi repo root.",
+      );
+    }
+    return proxyEnv;
+  }
+
+  const { Agent, EnvHttpProxyAgent, ProxyAgent, fetch: undiciFetch, setGlobalDispatcher } = undici;
+
+  // Determine the effective proxy URL: ALL_PROXY > HTTPS_PROXY > HTTP_PROXY.
+  const proxyUrl = proxyEnv["ALL_PROXY"] || proxyEnv["HTTPS_PROXY"] || proxyEnv["HTTP_PROXY"] || "";
+
+  if (proxyUrl) {
+    // ProxyAgent supports both http:// and socks5:// URLs.
+    const proxyDispatcher = new ProxyAgent(proxyUrl);
+    const directDispatcher = new Agent();
+
+    // 1. Patch globalThis.fetch so OpenAI-style clients use proxy, except NO_PROXY hosts.
+    (globalThis as Record<string, unknown>)["fetch"] = (url: RequestInfo, opts?: RequestInit) => {
+      const urlStr = requestInfoToUrlString(url);
+      const dispatcher = shouldBypassProxyForUrl(urlStr) ? directDispatcher : proxyDispatcher;
+      return undiciFetch(url, { ...opts, dispatcher } as Parameters<typeof undiciFetch>[1]);
+    };
+
+    setGlobalDispatcher(proxyDispatcher);
+  } else {
+    setGlobalDispatcher(new EnvHttpProxyAgent());
+  }
+
+  return proxyEnv;
 }
 
 function buildSmartRouterModels() {
@@ -359,8 +411,6 @@ export default function providerSmartRouter(pi: ExtensionAPI) {
 	loadSmartRouterEnvFile();
 	const proxyEnv = configureSmartRouterProxySupport();
 
-	// Re-register on every runtime/session recreation. Avoid one-time global guards here:
-	// Pi 0.65+ may rebuild the extension runtime on /new, /resume, /fork, and /reload.
 	const baseUrl = getSmartRouterBaseUrl();
 
 	if (baseUrl) {
@@ -388,9 +438,9 @@ export default function providerSmartRouter(pi: ExtensionAPI) {
 				baseUrl
 					? `Base URL: ${baseUrl}`
 					: `Base URL: not configured (set SMARTROUTER_BASE_URL or SMARTROUTER_URL)`,
-        `Proxy env: ${Object.entries(proxyEnv).map(([key, value]) => `${key}=${value}`).join(", ") || "none"}`,
         `API key env ${SMARTROUTER_API_KEY_ENV}: ${apiKey ? "set" : "missing"}`,
         `Admin token env ${SMARTROUTER_ADMIN_TOKEN_ENV}: ${adminToken ? "set" : "missing"}`,
+        `Proxy env: ${Object.keys(proxyEnv).length ? Object.entries(proxyEnv).map(([key, value]) => `${key}=${value}`).join(", ") : "not configured"}`,
         `Bundled models: ${buildSmartRouterModels().map((model) => model.id).join(", ")}`,
       ];
 
@@ -441,6 +491,10 @@ export default function providerSmartRouter(pi: ExtensionAPI) {
 	} else {
 		console.log(`[SmartRouter] Provider not registered (no base URL)`);
 	}
-	console.log(`[SmartRouter] Proxy env: ${Object.entries(proxyEnv).map(([key, value]) => `${key}=${value}`).join(", ") || "none"}`);
+	if (Object.keys(proxyEnv).length > 0) {
+		console.log(`[SmartRouter] Proxy env: ${Object.entries(proxyEnv).map(([key, value]) => `${key}=${value}`).join(", ")}`);
+	} else {
+		console.log("[SmartRouter] Proxy env: not configured");
+	}
 	console.log(`[SmartRouter] Status command: /smartrouter-status`);
 }
