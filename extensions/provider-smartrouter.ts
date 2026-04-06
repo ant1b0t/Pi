@@ -1,7 +1,7 @@
 // 📁 provider-smartrouter.ts — SmartRouter OpenAI-compatible provider for Pi.
-// 🎯 Core function: Load smartrouter.env, proxy-aware fetch with NO_PROXY, registerProvider.
+// 🎯 Core function: Load smartrouter.env, EnvHttpProxyAgent global dispatcher, registerProvider.
 // 🔗 Key dependencies: @mariozechner/pi-coding-agent, node:fs/path/url/os/module, npm undici.
-// 💡 Usage: Re-exported from .pi/extensions; install deps at repo root; extend NO_PROXY as needed.
+// 💡 Usage: Re-exported from .pi/extensions; install deps at repo root; set NO_PROXY for gateway IP.
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { existsSync, readFileSync } from "node:fs";
@@ -24,40 +24,6 @@ function loadUndiciSync(): typeof import("undici") | null {
 		dir = parent;
 	}
 	return null;
-}
-
-function requestInfoToUrlString(info: RequestInfo): string {
-	if (typeof info === "string") return info;
-	if (info instanceof URL) return info.href;
-	return info.url;
-}
-
-/** Honor NO_PROXY / no_proxy when extension forces a ProxyAgent on global fetch. */
-function shouldBypassProxyForUrl(urlString: string): boolean {
-	const raw = String(process.env.NO_PROXY || process.env.no_proxy || "").trim();
-	if (!raw) return false;
-	let host: string;
-	let hostPort: string;
-	try {
-		const u = new URL(urlString, "http://placeholder.local");
-		host = u.hostname;
-		hostPort = u.port ? `${u.hostname}:${u.port}` : u.hostname;
-	} catch {
-		return false;
-	}
-	const patterns = raw.split(/[\s,]+/).map((p) => p.trim()).filter(Boolean);
-	const hLower = host.toLowerCase();
-	const hpLower = hostPort.toLowerCase();
-	for (const pattern of patterns) {
-		if (pattern === "*") return true;
-		const pLower = pattern.toLowerCase();
-		if (pLower === hLower || pLower === hpLower) return true;
-		if (pattern.startsWith("*.") && (hLower.endsWith(pattern.slice(1).toLowerCase()) || hLower === pattern.slice(2).toLowerCase())) {
-			return true;
-		}
-		if (pattern.startsWith(".") && hLower.endsWith(pattern.toLowerCase())) return true;
-	}
-	return false;
 }
 
 const SMARTROUTER_PROVIDER_ID = "smartrouter";
@@ -273,10 +239,11 @@ const SMARTROUTER_MODEL_SEEDS: SmartRouterModelSeed[] = [
 	{
 		id: "qwen/coder-model",
 		name: "Qwen · Coder model",
-		reasoning: false,
+		reasoning: true,
 		input: ["text", "image"],
 		contextWindow: 1048576,
 		maxTokens: 65536,
+		compat: { supportsDeveloperRole: false, thinkingFormat: "qwen" },
 	},
 	{
 		id: "qwen/vision-model",
@@ -340,27 +307,30 @@ function configureSmartRouterProxySupport(): Record<string, string> {
     return proxyEnv;
   }
 
-  const { Agent, EnvHttpProxyAgent, ProxyAgent, fetch: undiciFetch, setGlobalDispatcher } = undici;
+  const { EnvHttpProxyAgent, fetch: undiciFetch, setGlobalDispatcher } = undici;
 
-  // Determine the effective proxy URL: ALL_PROXY > HTTPS_PROXY > HTTP_PROXY.
-  const proxyUrl = proxyEnv["ALL_PROXY"] || proxyEnv["HTTPS_PROXY"] || proxyEnv["HTTP_PROXY"] || "";
-
-  if (proxyUrl) {
-    // ProxyAgent supports both http:// and socks5:// URLs.
-    const proxyDispatcher = new ProxyAgent(proxyUrl);
-    const directDispatcher = new Agent();
-
-    // 1. Patch globalThis.fetch so OpenAI-style clients use proxy, except NO_PROXY hosts.
-    (globalThis as Record<string, unknown>)["fetch"] = (url: RequestInfo, opts?: RequestInit) => {
-      const urlStr = requestInfoToUrlString(url);
-      const dispatcher = shouldBypassProxyForUrl(urlStr) ? directDispatcher : proxyDispatcher;
-      return undiciFetch(url, { ...opts, dispatcher } as Parameters<typeof undiciFetch>[1]);
-    };
-
-    setGlobalDispatcher(proxyDispatcher);
-  } else {
-    setGlobalDispatcher(new EnvHttpProxyAgent());
+  // ALL_PROXY is non-standard; normalize to HTTPS_PROXY + HTTP_PROXY before constructing
+  // EnvHttpProxyAgent, which only reads HTTP(S)_PROXY and NO_PROXY from process.env.
+  const allProxy = proxyEnv["ALL_PROXY"];
+  if (allProxy) {
+    if (!process.env.HTTPS_PROXY && !process.env.https_proxy) process.env.HTTPS_PROXY = allProxy;
+    if (!process.env.HTTP_PROXY && !process.env.http_proxy) process.env.HTTP_PROXY = allProxy;
   }
+
+  // EnvHttpProxyAgent reads HTTPS_PROXY/HTTP_PROXY AND NO_PROXY on every request.
+  // Using it as the global undici dispatcher ensures ALL transports — including Pi's
+  // internal OpenAI SDK streaming transport — automatically bypass SOCKS for hosts
+  // listed in NO_PROXY (e.g. the SmartRouter gateway IP 178.104.47.116).
+  //
+  // A raw ProxyAgent as global dispatcher would route ALL undici traffic (including
+  // long-lived SSE streams) through SOCKS with no NO_PROXY awareness, causing
+  // v2rayn to abort the connection mid-stream ("wsasend aborted").
+  setGlobalDispatcher(new EnvHttpProxyAgent());
+
+  // Patch globalThis.fetch so any code that calls it directly also picks up
+  // the global dispatcher (and thus EnvHttpProxyAgent's NO_PROXY routing).
+  (globalThis as Record<string, unknown>)["fetch"] = (url: RequestInfo, opts?: RequestInit) =>
+    undiciFetch(url, opts as Parameters<typeof undiciFetch>[1]);
 
   return proxyEnv;
 }
@@ -496,5 +466,46 @@ export default function providerSmartRouter(pi: ExtensionAPI) {
 	} else {
 		console.log("[SmartRouter] Proxy env: not configured");
 	}
+	pi.registerCommand("smartrouter-test", {
+    description: "Send a live inference request via SmartRouter and show the result",
+    handler: async (args, ctx) => {
+      const modelId = args.trim() || "openai-codex/gpt-5.4";
+      const url     = getSmartRouterBaseUrl();
+      const apiKey  = getSmartRouterApiKey();
+
+      if (!url)    { ctx.ui.notify("SmartRouter base URL not configured.", "warning"); return; }
+      if (!apiKey) { ctx.ui.notify("SMARTROUTER_API_KEY not set.", "warning"); return; }
+
+      ctx.ui.notify(`[SmartRouter] Sending test to ${modelId} …`, "info");
+
+      try {
+        const res = await fetch(`${url}/chat/completions`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: modelId,
+            stream: false,
+            max_tokens: 32,
+            messages: [
+              { role: "system", content: "You are a helpful assistant." },
+              { role: "user",   content: "Reply with exactly: INFERENCE_OK" },
+            ],
+          }),
+        });
+        const raw = await res.text();
+        if (!res.ok) {
+          ctx.ui.notify(`HTTP ${res.status} — ${raw.slice(0, 240)}`, "warning");
+          return;
+        }
+        const json  = JSON.parse(raw);
+        const reply = json.choices?.[0]?.message?.content ?? "(no content)";
+        ctx.ui.notify(`HTTP ${res.status} · model: ${json.model ?? modelId}\nReply: ${reply}`, "info");
+      } catch (err: any) {
+        ctx.ui.notify(`Fetch error: ${err?.message ?? String(err)}`, "warning");
+      }
+    },
+  });
+
 	console.log(`[SmartRouter] Status command: /smartrouter-status`);
+	console.log(`[SmartRouter] Test command:   /smartrouter-test [model-id]`);
 }
