@@ -6,6 +6,7 @@
   "dependencies": {
     "@types/diff": "^7.0.2",
     "diff": "^8.0.3",
+    "undici": "^8.0.2",
     "yaml": "^2.8.0"
   }
 }

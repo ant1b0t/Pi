@@ -8,11 +8,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch, setGlobalDispatcher } from "undici";
 
 const SMARTROUTER_PROVIDER_ID = "smartrouter";
 const SMARTROUTER_API_KEY_ENV = "SMARTROUTER_API_KEY";
 const SMARTROUTER_ADMIN_TOKEN_ENV = "SMARTROUTER_ADMIN_TOKEN";
 const SMARTROUTER_ENV_BASENAME = "smartrouter.env";
+const SMARTROUTER_PROXY_ENV_KEYS = ["ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"] as const;
 
 /**
  * Parses KEY=value lines from one smartrouter.env file.
@@ -63,6 +65,39 @@ function loadSmartRouterEnvFile(): void {
 			process.env[key] = value;
 		}
 	}
+}
+
+function getSmartRouterProxyEnv(): Record<string, string> {
+	const proxyEnv: Record<string, string> = {};
+	for (const key of SMARTROUTER_PROXY_ENV_KEYS) {
+		const value = String(process.env[key] || "").trim();
+		if (value) proxyEnv[key] = value;
+	}
+	return proxyEnv;
+}
+
+function configureSmartRouterProxySupport(): Record<string, string> {
+	const globalKey = "__piSmartRouterProxyConfigSignature";
+	const proxyEnv = getSmartRouterProxyEnv();
+	const signature = JSON.stringify(proxyEnv);
+	const globalState = globalThis as Record<string, unknown>;
+
+	if (globalState[globalKey] === signature) {
+		return proxyEnv;
+	}
+
+	const proxyUrl = proxyEnv.ALL_PROXY || proxyEnv.HTTPS_PROXY || proxyEnv.HTTP_PROXY || "";
+	if (proxyUrl) {
+		const dispatcher = new ProxyAgent(proxyUrl);
+		globalState.fetch = (url: string | URL | Request, init?: RequestInit) =>
+			undiciFetch(url, { ...init, dispatcher });
+		setGlobalDispatcher(dispatcher);
+	} else {
+		setGlobalDispatcher(new EnvHttpProxyAgent());
+	}
+
+	globalState[globalKey] = signature;
+	return proxyEnv;
 }
 
 interface SmartRouterModelSeed {
@@ -293,6 +328,7 @@ function formatSmartRouterStatusLine(label: string, result: { ok: boolean; statu
 
 export default function providerSmartRouter(pi: ExtensionAPI) {
 	loadSmartRouterEnvFile();
+	const proxyEnv = configureSmartRouterProxySupport();
 
 	// Re-register on every runtime/session recreation. Avoid one-time global guards here:
 	// Pi 0.65+ may rebuild the extension runtime on /new, /resume, /fork, and /reload.
@@ -323,6 +359,7 @@ export default function providerSmartRouter(pi: ExtensionAPI) {
 				baseUrl
 					? `Base URL: ${baseUrl}`
 					: `Base URL: not configured (set SMARTROUTER_BASE_URL or SMARTROUTER_URL)`,
+        `Proxy env: ${Object.entries(proxyEnv).map(([key, value]) => `${key}=${value}`).join(", ") || "none"}`,
         `API key env ${SMARTROUTER_API_KEY_ENV}: ${apiKey ? "set" : "missing"}`,
         `Admin token env ${SMARTROUTER_ADMIN_TOKEN_ENV}: ${adminToken ? "set" : "missing"}`,
         `Bundled models: ${buildSmartRouterModels().map((model) => model.id).join(", ")}`,
@@ -375,5 +412,6 @@ export default function providerSmartRouter(pi: ExtensionAPI) {
 	} else {
 		console.log(`[SmartRouter] Provider not registered (no base URL)`);
 	}
+	console.log(`[SmartRouter] Proxy env: ${Object.entries(proxyEnv).map(([key, value]) => `${key}=${value}`).join(", ") || "none"}`);
 	console.log(`[SmartRouter] Status command: /smartrouter-status`);
 }
