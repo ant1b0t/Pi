@@ -1,14 +1,31 @@
-// [provider-smartrouter.ts] Registers SmartRouter OpenAI-compatible provider for Pi.
-// Core function: Loads smartrouter.env (global .pi, cwd .pi, extension dir) then registerProvider.
-// Key dependencies: @mariozechner/pi-coding-agent, node:fs/path/url/os.
-// Usage: Auto via .pi/extensions/provider-smartrouter.ts or pi -e extensions/provider-smartrouter.ts
+// 📁 provider-smartrouter.ts — SmartRouter OpenAI-compatible provider for Pi.
+// 🎯 Core function: Load smartrouter.env layers, optional undici proxy, registerProvider.
+// 🔗 Key dependencies: @mariozechner/pi-coding-agent, node:fs/path/url/os/module, npm undici (optional).
+// 💡 Usage: .pi/extensions re-exports; run `npm install` / `bun install` in repo for proxy support.
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch, setGlobalDispatcher } from "undici";
+
+/** Resolve `undici` by walking up from this file (Pi loads extensions outside default NODE_PATH). */
+function loadUndiciSync(): typeof import("undici") | null {
+	const req = createRequire(import.meta.url);
+	let dir = dirname(fileURLToPath(import.meta.url));
+	for (;;) {
+		try {
+			return req(req.resolve("undici", { paths: [dir] }));
+		} catch {
+			/* try parent */
+		}
+		const parent = dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
+	}
+	return null;
+}
 
 const SMARTROUTER_PROVIDER_ID = "smartrouter";
 const SMARTROUTER_API_KEY_ENV = "SMARTROUTER_API_KEY";
@@ -86,11 +103,23 @@ function configureSmartRouterProxySupport(): Record<string, string> {
 		return proxyEnv;
 	}
 
+	const undici = loadUndiciSync();
+	if (!undici) {
+		if (proxyEnv.ALL_PROXY || proxyEnv.HTTPS_PROXY || proxyEnv.HTTP_PROXY) {
+			console.warn(
+				"[SmartRouter] Proxy env vars are set but `undici` is missing. Run `npm install` or `bun install` in the Pi repo root.",
+			);
+		}
+		globalState[globalKey] = signature;
+		return proxyEnv;
+	}
+
+	const { EnvHttpProxyAgent, ProxyAgent, fetch: undiciFetch, setGlobalDispatcher } = undici;
 	const proxyUrl = proxyEnv.ALL_PROXY || proxyEnv.HTTPS_PROXY || proxyEnv.HTTP_PROXY || "";
 	if (proxyUrl) {
 		const dispatcher = new ProxyAgent(proxyUrl);
 		globalState.fetch = (url: string | URL | Request, init?: RequestInit) =>
-			undiciFetch(url, { ...init, dispatcher });
+			undiciFetch(url, { ...init, dispatcher } as Parameters<typeof undiciFetch>[1]);
 		setGlobalDispatcher(dispatcher);
 	} else {
 		setGlobalDispatcher(new EnvHttpProxyAgent());
