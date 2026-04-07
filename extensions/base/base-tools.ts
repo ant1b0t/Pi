@@ -33,6 +33,7 @@ import { tmpdir } from "os";
 import { currentModelString, loadModelTiers, resolveModel, type ModelTier } from "./model-tiers.ts";
 import {
 	invalidArgument,
+	notFound,
 	temporaryUnavailable,
 	conciseDetails,
 } from "./tool-contract.ts";
@@ -600,10 +601,31 @@ export default function baseTools(pi: ExtensionAPI) {
 		refreshTodoUI(ctx);
 	};
 
+	const getTodoFocusSummary = () => {
+		if (todos.length === 0) return "No todos.";
+		const doneCount = todos.filter(t => t.status === "done").length;
+		const current = todos.find(t => t.status === "in_progress") ?? todos.find(t => t.status === "pending");
+		const nextPending = todos.find(t => t.status === "pending" && t.id !== current?.id);
+		let text = `Todo updated. ${doneCount}/${todos.length} done.`;
+		if (current) {
+			const currentLabel = current.status === "in_progress" ? "Current" : "Next";
+			text += ` ${currentLabel}: #${current.id} ${current.text}.`;
+		}
+		if (nextPending) {
+			text += ` Then: #${nextPending.id} ${nextPending.text}.`;
+		}
+		if (doneCount === todos.length) {
+			text += " All tasks completed.";
+		} else {
+			const pendingCount = todos.filter(t => t.status === "pending").length;
+			if (pendingCount > 0) text += ` Open: ${pendingCount} pending.`;
+		}
+		return text;
+	};
+
 	const refreshTodoUI = (ctx: ExtensionContext) => {
 		const total = todos.length;
-		const pending = todos.filter(t => t.status !== "done");
-		if (total === 0 || pending.length === 0) {
+		if (total === 0) {
 			ctx.ui.setWidget("todo-progress", undefined);
 			return;
 		}
@@ -611,17 +633,16 @@ export default function baseTools(pi: ExtensionAPI) {
 			return {
 				render(width: number) {
 					const dn2 = todos.filter(t => t.status === "done").length;
-					const barWidth = Math.min(15, width - 40);
+					const barWidth = Math.max(1, Math.min(12, width - 26));
 					const filled = total > 0 ? Math.round((dn2 / total) * barWidth) : 0;
-					const bar = theme.fg("success", "█".repeat(filled)) + theme.fg("dim", "░".repeat(barWidth - filled));
+					const bar = theme.fg("success", "■".repeat(filled)) + theme.fg("dim", "·".repeat(barWidth - filled));
 					const cur = todos.find(t => t.status === "in_progress") ?? todos.find(t => t.status === "pending");
 					const curLabel = cur
 						? (cur.status === "in_progress"
-							? theme.fg("accent", `▶ #${cur.id} ${cur.text}`)
-							: theme.fg("muted", `→ #${cur.id} ${cur.text}`))
-						: theme.fg("success", "All done!");
-					const line = theme.fg("dim", " TODO [") + bar + theme.fg("dim", "] ") +
-						theme.fg("warning", `${dn2}/${total} `) + curLabel;
+							? theme.fg("accent", `#${cur.id} ${cur.text}`)
+							: theme.fg("muted", `#${cur.id} ${cur.text}`))
+						: theme.fg("success", "done");
+					const line = theme.fg("dim", bar) + theme.fg("muted", ` ${dn2}/${total} `) + curLabel;
 					return [truncateToWidth(line, width - 2)];
 				},
 				invalidate() {}
@@ -964,18 +985,43 @@ export default function baseTools(pi: ExtensionAPI) {
 	if (isAllowed("todo")) pi.registerTool({
 		name: "todo", label: "Todo", description: "Checklist.", parameters: TodoParams,
 		async execute(_id, params, _s, _u, ctx) {
+			if (params.action === "add" && (!params.items || params.items.length === 0)) {
+				return invalidArgument("items[] is required for action=add", "Retry with a non-empty items array").toToolResult();
+			}
+			if ((params.action === "done" || params.action === "progress" || params.action === "remove") && (!params.ids || params.ids.length === 0)) {
+				return invalidArgument(`ids[] is required for action=${params.action}`, "Retry with at least one task id. Call todo list to see valid ids").toToolResult();
+			}
 			if (params.action === "add" && params.items) {
 				params.items.forEach(t => todos.push({ id: todoNextId++, text: t, status: "pending" }));
 			} else if (params.action === "progress" && params.ids) {
+				for (const id of params.ids) {
+					const t = todos.find(x => x.id === id);
+					if (!t) return notFound(`Task #${id} not found`, "Call todo list to see valid ids").toToolResult();
+				}
 				todos.forEach(t => { if (params.ids!.includes(t.id)) t.status = "in_progress"; else if (t.status === "in_progress") t.status = "pending"; });
 			} else if (params.action === "done" && params.ids) {
+				for (const id of params.ids) {
+					const t = todos.find(x => x.id === id);
+					if (!t) return notFound(`Task #${id} not found`, "Call todo list to see valid ids").toToolResult();
+				}
 				todos.forEach(t => { if (params.ids!.includes(t.id)) t.status = "done"; });
 			} else if (params.action === "remove" && params.ids) {
+				for (const id of params.ids) {
+					const t = todos.find(x => x.id === id);
+					if (!t) return notFound(`Task #${id} not found`, "Call todo list to see valid ids").toToolResult();
+				}
 				todos = todos.filter(t => !params.ids!.includes(t.id));
 			} else if (params.action === "clear") {
 				todos = []; todoNextId = 1;
 			}
-			const summary = `Todo: ${todos.filter(t => t.status === "done").length}/${todos.length} done.`;
+			const summary = params.action === "list"
+				? (todos.length === 0
+					? "No todos."
+					: todos.map(t => {
+						const icon = t.status === "done" ? "✓" : t.status === "in_progress" ? "▶" : "○";
+						return `${icon} #${t.id} ${t.text}`;
+					}).join("\n"))
+				: getTodoFocusSummary();
 			refreshTodoUI(ctx);
 			return { content: [{ type: "text", text: summary }], details: conciseDetails(summary, { action: params.action, items: [...todos], nextId: todoNextId } as any) };
 		},
