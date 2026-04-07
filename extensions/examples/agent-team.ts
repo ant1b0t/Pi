@@ -21,19 +21,13 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { Text, type AutocompleteItem, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { spawn } from "child_process";
-import { readdirSync, readFileSync, existsSync, mkdirSync, unlinkSync } from "fs";
-import { join, resolve } from "path";
+import { readFileSync, existsSync, mkdirSync, unlinkSync } from "fs";
+import { join } from "path";
 import { applyExtensionDefaults } from "../base/themeMap.ts";
+import { currentModelString, loadModelTiers, resolveModel, type ModelTiers } from "../base/model-tiers.ts";
+import { scanAgentDirs, type AgentDef } from "../base/agent-defs.ts";
 
 // ── Types ────────────────────────────────────────
-
-interface AgentDef {
-	name: string;
-	description: string;
-	tools: string;
-	systemPrompt: string;
-	file: string;
-}
 
 interface AgentState {
 	def: AgentDef;
@@ -74,64 +68,6 @@ function parseTeamsYaml(rawInput: string): Record<string, string[]> {
 	return teams;
 }
 
-// ── Frontmatter Parser ───────────────────────────
-
-function parseAgentFile(filePath: string): AgentDef | null {
-	try {
-		const raw = readFileSync(filePath, "utf-8").replace(/\r\n/g, "\n");
-		const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-		if (!match) return null;
-
-		const frontmatter: Record<string, string> = {};
-		for (const line of match[1].split("\n")) {
-			const idx = line.indexOf(":");
-			if (idx > 0) {
-				frontmatter[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
-			}
-		}
-
-		if (!frontmatter.name) return null;
-
-		return {
-			name: frontmatter.name,
-			description: frontmatter.description || "",
-			tools: frontmatter.tools || "read,grep,find,ls",
-			systemPrompt: match[2].trim(),
-			file: filePath,
-		};
-	} catch {
-		return null;
-	}
-}
-
-function scanAgentDirs(cwd: string): AgentDef[] {
-	const dirs = [
-		join(cwd, "agents"),
-		join(cwd, ".claude", "agents"),
-		join(cwd, ".pi", "agents"),
-	];
-
-	const agents: AgentDef[] = [];
-	const seen = new Set<string>();
-
-	for (const dir of dirs) {
-		if (!existsSync(dir)) continue;
-		try {
-			for (const file of readdirSync(dir)) {
-				if (!file.endsWith(".md")) continue;
-				const fullPath = resolve(dir, file);
-				const def = parseAgentFile(fullPath);
-				if (def && !seen.has(def.name.toLowerCase())) {
-					seen.add(def.name.toLowerCase());
-					agents.push(def);
-				}
-			}
-		} catch {}
-	}
-
-	return agents;
-}
-
 // ── Extension ────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
@@ -143,8 +79,10 @@ export default function (pi: ExtensionAPI) {
 	let widgetCtx: any;
 	let sessionDir = "";
 	let contextWindow = 0;
+	let modelTiers: ModelTiers | null = null;
 
 	function loadAgents(cwd: string) {
+		modelTiers = loadModelTiers(cwd);
 		// Create session storage dir
 		sessionDir = join(cwd, ".pi", "agent-sessions");
 		if (!existsSync(sessionDir)) {
@@ -335,9 +273,12 @@ export default function (pi: ExtensionAPI) {
 			updateWidget();
 		}, 1000);
 
-		const model = ctx.model
-			? `${ctx.model.provider}/${ctx.model.id}`
-			: "openrouter/google/gemini-3-flash-preview";
+		const parentModel = currentModelString(ctx.model) || "openrouter/google/gemini-3-flash-preview";
+		const model = resolveModel({
+			tier: state.def.tier,
+			tiers: modelTiers,
+			fallback: parentModel,
+		}) || parentModel;
 
 		// Session file for this agent
 		const agentKey = state.def.name.toLowerCase().replace(/\s+/g, "-");

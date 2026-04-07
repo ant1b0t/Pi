@@ -30,6 +30,7 @@ import { Type } from "@sinclair/typebox";
 import { spawn } from "child_process";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync, readdirSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
+import { currentModelString, loadModelTiers, resolveModel, type ModelTier } from "./model-tiers.ts";
 import {
 	invalidArgument,
 	temporaryUnavailable,
@@ -176,6 +177,7 @@ const TaskParams = Type.Object({
 	description: Type.Optional(Type.String({ description: "Task description" })),
 	tasks: Type.Optional(Type.Array(Type.String({ description: "Task description" }), { description: `Independent tasks to run in parallel (max ${TASK_BATCH_MAX_ITEMS})` })),
 	tools: Type.Optional(Type.String({ description: "Tools (default: read,bash,grep,find,ls)" })),
+	tier: Type.Optional(Type.String({ description: 'Optional model tier for worker(s): "high" | "medium" | "low"' })),
 	timeout_ms: Type.Optional(Type.Number({ description: `Per-worker timeout in ms (default: ${TASK_TIMEOUT_MS})` })),
 	max_output_chars: Type.Optional(Type.Number({ description: `Max returned output chars per worker (default: ${TASK_OUTPUT_MAX_LENGTH})` })),
 	max_parallel: Type.Optional(Type.Number({ description: `Parallel workers for tasks[] (default: ${TASK_BATCH_DEFAULT_PARALLEL}, max: ${TASK_BATCH_MAX_PARALLEL})` })),
@@ -365,12 +367,15 @@ async function runTaskWorker(options: {
 	tools: string;
 	cwd: string;
 	timeoutMs: number;
+	model?: string;
+	tier?: ModelTier;
 	signal?: AbortSignal;
 	onUpdate?: (snapshot: { turnCount: number; toolCalls: { name: string; preview: string }[]; outputPreview: string }) => void;
 }): Promise<{ status: "done" | "error"; exitCode: number; elapsed: number; turnCount: number; toolCalls: { name: string; preview: string }[]; outputPreview: string; text: string; error?: string; }> {
 	const start = Date.now();
 	const piCli = resolvePiCliPath();
-	const args = [piCli, "--mode", "json", "-p", "--no-session", "--no-extensions", "--tools", options.tools, "--thinking", "off", options.description];
+	const resolvedModel = options.model || resolveModel({ tier: options.tier, tiers: loadModelTiers(options.cwd), fallback: undefined });
+	const args = [piCli, "--mode", "json", "-p", "--no-session", "--no-extensions", ...(resolvedModel ? ["--model", resolvedModel] : []), "--tools", options.tools, "--thinking", "off", options.description];
 
 	return await new Promise((resolve) => {
 		const proc = spawn(process.execPath, args, {
@@ -744,6 +749,11 @@ export default function baseTools(pi: ExtensionAPI) {
 			const descriptions = tasks.length > 0 ? tasks : [description];
 			const parallelCount = Math.min(Math.max(1, Math.floor(params.max_parallel ?? TASK_BATCH_DEFAULT_PARALLEL)), TASK_BATCH_MAX_PARALLEL, descriptions.length);
 			const tools = params.tools || "read,bash,grep,find,ls";
+			const rawTier = typeof (params as any).tier === "string" ? (params as any).tier.trim().toLowerCase() : "";
+			const taskTier = rawTier === "high" || rawTier === "medium" || rawTier === "low"
+				? rawTier as ModelTier
+				: undefined;
+			const parentModel = currentModelString(ctx.model);
 			const details: TaskDetails = {
 				description: description || undefined,
 				taskCount: descriptions.length,
@@ -802,6 +812,8 @@ export default function baseTools(pi: ExtensionAPI) {
 							tools,
 							cwd: ctx.cwd,
 							timeoutMs,
+							model: parentModel,
+							tier: taskTier,
 							signal,
 							onUpdate: (snapshot) => {
 								worker.turnCount = snapshot.turnCount;

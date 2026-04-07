@@ -17,6 +17,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import * as path from "node:path";
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -36,22 +37,26 @@ export interface ModelTiers {
  * Returns null if the file doesn't exist or is malformed.
  */
 export function loadModelTiers(cwd: string): ModelTiers | null {
-	const filePath = path.resolve(cwd, ".pi", "model-tiers.json");
-	if (!existsSync(filePath)) return null;
+	const candidatePaths = [
+		path.resolve(cwd, ".pi", "model-tiers.json"),
+		path.resolve(homedir(), ".pi", "model-tiers.json"),
+	];
 
-	try {
-		const raw = readFileSync(filePath, "utf-8");
-		const parsed = JSON.parse(raw);
+	const isValidTier = (val: any) => typeof val === "string" || (Array.isArray(val) && val.length > 0 && val.every(v => typeof v === "string" && v.trim().length > 0));
 
-		const isValidTier = (val: any) => typeof val === "string" || (Array.isArray(val) && val.length > 0 && val.every(v => typeof v === "string" && v.trim().length > 0));
-
-		if (isValidTier(parsed.high) && isValidTier(parsed.medium) && isValidTier(parsed.low)) {
-			return { high: parsed.high, medium: parsed.medium, low: parsed.low };
+	for (const filePath of candidatePaths) {
+		if (!existsSync(filePath)) continue;
+		try {
+			const raw = readFileSync(filePath, "utf-8");
+			const parsed = JSON.parse(raw);
+			if (isValidTier(parsed.high) && isValidTier(parsed.medium) && isValidTier(parsed.low)) {
+				return { high: parsed.high, medium: parsed.medium, low: parsed.low };
+			}
+		} catch {
+			// Try the next candidate path.
 		}
-		return null;
-	} catch {
-		return null;
 	}
+	return null;
 }
 
 // ── Resolver ───────────────────────────────────────────────────────────

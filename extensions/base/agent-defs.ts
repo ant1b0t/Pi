@@ -15,11 +15,15 @@
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { homedir } from "node:os";
+
+export type AgentTier = "high" | "medium" | "low";
 
 export interface AgentDef {
 	name: string;
 	description: string;
 	tools: string;
+	tier?: AgentTier;
 	systemPrompt: string;
 	file: string;
 }
@@ -50,10 +54,16 @@ export function parseAgentFile(filePath: string): AgentDef | null {
 
 		if (!frontmatter.name) return null;
 
+		const rawTier = (frontmatter.tier || "").trim().toLowerCase();
+		const tier = rawTier === "high" || rawTier === "medium" || rawTier === "low"
+			? rawTier
+			: undefined;
+
 		return {
 			name: frontmatter.name,
 			description: frontmatter.description || "",
 			tools: frontmatter.tools || "read,grep,find,ls",
+			tier,
 			systemPrompt: match[2].trim(),
 			file: filePath,
 		};
@@ -64,16 +74,26 @@ export function parseAgentFile(filePath: string): AgentDef | null {
 
 /**
  * Scan standard directories for agent definitions (.md files).
- * Standard dirs: <cwd>/agents/, <cwd>/.claude/agents/, <cwd>/.pi/agents/
+ * Standard dirs: <cwd>/agents/, <cwd>/.claude/agents/, <cwd>/.gemini/agents/,
+ * <cwd>/.codex/agents/, <cwd>/.pi/agents/, plus optional global dirs under the home directory.
  *
  * @param cwd Project root directory
+ * @param includeGlobal Include global agent dirs such as ~/.pi/agent/agents (default: true)
  * @returns Array of valid AgentDefs found, deduplicated by name
  */
-export function scanAgentDirs(cwd: string): AgentDef[] {
+export function scanAgentDirs(cwd: string, includeGlobal = true): AgentDef[] {
 	const dirs = [
 		join(cwd, "agents"),
 		join(cwd, ".claude", "agents"),
+		join(cwd, ".gemini", "agents"),
+		join(cwd, ".codex", "agents"),
 		join(cwd, ".pi", "agents"),
+		...(includeGlobal ? [
+			join(homedir(), ".pi", "agent", "agents"),
+			join(homedir(), ".claude", "agents"),
+			join(homedir(), ".gemini", "agents"),
+			join(homedir(), ".codex", "agents"),
+		] : []),
 	];
 
 	const agents: AgentDef[] = [];

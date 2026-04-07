@@ -22,13 +22,17 @@ import { spawn } from "child_process";
 import { readdirSync, readFileSync, existsSync, mkdirSync } from "fs";
 import { join, resolve } from "path";
 import { applyExtensionDefaults } from "./themeMap.ts";
+import { currentModelString, loadModelTiers, resolveModel, type ModelTiers } from "../base/model-tiers.ts";
 
 // ── Types ────────────────────────────────────────
+
+type AgentTier = "high" | "medium" | "low";
 
 interface ExpertDef {
 	name: string;
 	description: string;
 	tools: string;
+	tier?: AgentTier;
 	systemPrompt: string;
 	file: string;
 }
@@ -65,10 +69,16 @@ function parseAgentFile(filePath: string): ExpertDef | null {
 
 		if (!frontmatter.name) return null;
 
+		const rawTier = (frontmatter.tier || "").trim().toLowerCase();
+		const tier = rawTier === "high" || rawTier === "medium" || rawTier === "low"
+			? rawTier as AgentTier
+			: undefined;
+
 		return {
 			name: frontmatter.name,
 			description: frontmatter.description || "",
 			tools: frontmatter.tools || "read,grep,find,ls",
+			tier,
 			systemPrompt: match[2].trim(),
 			file: filePath,
 		};
@@ -100,8 +110,10 @@ export default function (pi: ExtensionAPI) {
 	const experts: Map<string, ExpertState> = new Map();
 	let gridCols = 3;
 	let widgetCtx: any;
+	let modelTiers: ModelTiers | null = null;
 
 	function loadExperts(cwd: string) {
+		modelTiers = loadModelTiers(cwd);
 		// Pi Pi experts live in their own dedicated directory
 		const piPiDir = join(cwd, ".pi", "agents", "pi-pi");
 
@@ -272,9 +284,12 @@ export default function (pi: ExtensionAPI) {
 			updateWidget();
 		}, 1000);
 
-		const model = ctx.model
-			? `${ctx.model.provider}/${ctx.model.id}`
-			: "openrouter/google/gemini-3-flash-preview";
+		const parentModel = currentModelString(ctx.model) || "openrouter/google/gemini-3-flash-preview";
+		const model = resolveModel({
+			tier: state.def.tier,
+			tiers: modelTiers,
+			fallback: parentModel,
+		}) || parentModel;
 
 		const args = [
 			"--mode", "json",

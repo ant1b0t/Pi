@@ -25,9 +25,11 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { spawn } from "child_process";
-import { readFileSync, existsSync, readdirSync, mkdirSync, unlinkSync } from "fs";
-import { join, resolve } from "path";
+import { readFileSync, existsSync, mkdirSync, unlinkSync } from "fs";
+import { join } from "path";
 import { applyExtensionDefaults } from "../base/themeMap.ts";
+import { currentModelString, loadModelTiers, resolveModel, type ModelTiers } from "../base/model-tiers.ts";
+import { scanAgentDirs, type AgentDef } from "../base/agent-defs.ts";
 
 // ── Types ────────────────────────────────────────
 
@@ -40,13 +42,6 @@ interface ChainDef {
 	name: string;
 	description: string;
 	steps: ChainStep[];
-}
-
-interface AgentDef {
-	name: string;
-	description: string;
-	tools: string;
-	systemPrompt: string;
 }
 
 interface StepState {
@@ -131,61 +126,6 @@ function parseChainYaml(raw: string): ChainDef[] {
 	return chains;
 }
 
-// ── Frontmatter Parser ───────────────────────────
-
-function parseAgentFile(filePath: string): AgentDef | null {
-	try {
-		const raw = readFileSync(filePath, "utf-8").replace(/\r\n/g, "\n");
-		const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-		if (!match) return null;
-
-		const frontmatter: Record<string, string> = {};
-		for (const line of match[1].split("\n")) {
-			const idx = line.indexOf(":");
-			if (idx > 0) {
-				frontmatter[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
-			}
-		}
-
-		if (!frontmatter.name) return null;
-
-		return {
-			name: frontmatter.name,
-			description: frontmatter.description || "",
-			tools: frontmatter.tools || "read,grep,find,ls",
-			systemPrompt: match[2].trim(),
-		};
-	} catch {
-		return null;
-	}
-}
-
-function scanAgentDirs(cwd: string): Map<string, AgentDef> {
-	const dirs = [
-		join(cwd, "agents"),
-		join(cwd, ".claude", "agents"),
-		join(cwd, ".pi", "agents"),
-	];
-
-	const agents = new Map<string, AgentDef>();
-
-	for (const dir of dirs) {
-		if (!existsSync(dir)) continue;
-		try {
-			for (const file of readdirSync(dir)) {
-				if (!file.endsWith(".md")) continue;
-				const fullPath = resolve(dir, file);
-				const def = parseAgentFile(fullPath);
-				if (def && !agents.has(def.name.toLowerCase())) {
-					agents.set(def.name.toLowerCase(), def);
-				}
-			}
-		} catch {}
-	}
-
-	return agents;
-}
-
 // ── Extension ────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
@@ -195,18 +135,20 @@ export default function (pi: ExtensionAPI) {
 	let widgetCtx: any;
 	let sessionDir = "";
 	const agentSessions: Map<string, string | null> = new Map();
+	let modelTiers: ModelTiers | null = null;
 
 	// Per-step state for the active chain
 	let stepStates: StepState[] = [];
 	let pendingReset = false;
 
 	function loadChains(cwd: string) {
+		modelTiers = loadModelTiers(cwd);
 		sessionDir = join(cwd, ".pi", "agent-sessions");
 		if (!existsSync(sessionDir)) {
 			mkdirSync(sessionDir, { recursive: true });
 		}
 
-		allAgents = scanAgentDirs(cwd);
+		allAgents = new Map(scanAgentDirs(cwd).map((def) => [def.name.toLowerCase(), def]));
 
 		agentSessions.clear();
 		for (const [key] of allAgents) {
@@ -335,9 +277,12 @@ export default function (pi: ExtensionAPI) {
 		stepIndex: number,
 		ctx: any,
 	): Promise<{ output: string; exitCode: number; elapsed: number }> {
-		const model = ctx.model
-			? `${ctx.model.provider}/${ctx.model.id}`
-			: "openrouter/google/gemini-3-flash-preview";
+		const parentModel = currentModelString(ctx.model) || "openrouter/google/gemini-3-flash-preview";
+		const model = resolveModel({
+			tier: agentDef.tier,
+			tiers: modelTiers,
+			fallback: parentModel,
+		}) || parentModel;
 
 		const agentKey = agentDef.name.toLowerCase().replace(/\s+/g, "-");
 		const agentSessionFile = join(sessionDir, `chain-${agentKey}.json`);

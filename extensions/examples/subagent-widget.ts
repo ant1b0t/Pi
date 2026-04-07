@@ -21,6 +21,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { applyExtensionDefaults } from "./themeMap.ts";
+import { currentModelString, loadModelTiers, resolveModel, type ModelTiers, type ModelTier } from "../base/model-tiers.ts";
 
 interface SubState {
 	id: number;
@@ -31,6 +32,7 @@ interface SubState {
 	elapsed: number;
 	sessionFile: string;   // persistent JSONL session path — used by /subcont to resume
 	turnCount: number;     // increments each time /subcont continues this agent
+	tier?: ModelTier;
 	proc?: any;            // active ChildProcess ref (for kill on /subrm)
 }
 
@@ -38,6 +40,7 @@ export default function (pi: ExtensionAPI) {
 	const agents: Map<number, SubState> = new Map();
 	let nextId = 1;
 	let widgetCtx: any;
+	let modelTiers: ModelTiers | null = null;
 
 	// ── Session file helpers ──────────────────────────────────────────────────
 
@@ -134,9 +137,12 @@ export default function (pi: ExtensionAPI) {
 		prompt: string,
 		ctx: any,
 	): Promise<void> {
-		const model = ctx.model
-			? `${ctx.model.provider}/${ctx.model.id}`
-			: "openrouter/google/gemini-3-flash-preview";
+		const parentModel = currentModelString(ctx.model) || "openrouter/google/gemini-3-flash-preview";
+		const model = resolveModel({
+			tier: state.tier,
+			tiers: modelTiers,
+			fallback: parentModel,
+		}) || parentModel;
 
 		return new Promise<void>((resolve) => {
 			const proc = spawn("pi", [
@@ -220,9 +226,14 @@ export default function (pi: ExtensionAPI) {
 		description: "Spawn a background subagent to perform a task. Returns the subagent ID immediately while it runs in the background. Results will be delivered as a follow-up message when finished.",
 		parameters: Type.Object({
 			task: Type.String({ description: "The complete task description for the subagent to perform" }),
+			tier: Type.Optional(Type.String({ description: 'Optional model tier: "high" | "medium" | "low"' })),
 		}),
 		execute: async (callId, args, _signal, _onUpdate, ctx) => {
 			widgetCtx = ctx;
+			const rawTier = typeof args.tier === "string" ? args.tier.trim().toLowerCase() : "";
+			const tier = rawTier === "high" || rawTier === "medium" || rawTier === "low"
+				? rawTier as ModelTier
+				: undefined;
 			const id = nextId++;
 			const state: SubState = {
 				id,
@@ -233,6 +244,7 @@ export default function (pi: ExtensionAPI) {
 				elapsed: 0,
 				sessionFile: makeSessionFile(id),
 				turnCount: 1,
+				tier,
 			};
 			agents.set(id, state);
 			updateWidgets();
@@ -331,6 +343,7 @@ export default function (pi: ExtensionAPI) {
 		description: "Spawn a subagent with live widget: /sub <task>",
 		handler: async (args, ctx) => {
 			widgetCtx = ctx;
+			modelTiers = loadModelTiers(ctx.cwd || process.cwd());
 
 			const task = args?.trim();
 			if (!task) {
@@ -348,6 +361,7 @@ export default function (pi: ExtensionAPI) {
 				elapsed: 0,
 				sessionFile: makeSessionFile(id),
 				turnCount: 1,
+				tier: undefined,
 			};
 			agents.set(id, state);
 			updateWidgets();
@@ -467,6 +481,7 @@ export default function (pi: ExtensionAPI) {
 	// ── Session lifecycle ─────────────────────────────────────────────────────
 
 	pi.on("session_start", async (_event, ctx) => {
+		modelTiers = loadModelTiers(ctx.cwd || process.cwd());
 		applyExtensionDefaults(import.meta.url, ctx);
 		for (const [id, state] of Array.from(agents.entries())) {
 			if (state.proc && state.status === "running") {
