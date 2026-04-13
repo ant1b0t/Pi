@@ -155,7 +155,7 @@ just open purpose-gate minimal tool-counter-widget
 
 ## SmartRouter Provider
 
-Project-local auto-discovery is enabled via `.pi/extensions/provider-smartrouter.ts`.
+Extension source: `extensions/provider-smartrouter.ts`. For always-on usage, add it to `~/.pi/agent/settings.json` under `extensions`.
 
 Configuration lives in:
 - `.pi/smartrouter.env` — local active config (gitignored)
@@ -166,6 +166,8 @@ Expected variables:
 SMARTROUTER_BASE_URL=https://your-smartrouter-host.example
 SMARTROUTER_API_KEY=...
 SMARTROUTER_ADMIN_TOKEN=...
+# Optional: direct | proxy (default: proxy)
+SMARTROUTER_STREAM_TRANSPORT=proxy
 ```
 
 Useful commands:

@@ -1,40 +1,63 @@
 // 📁 provider-smartrouter.ts — SmartRouter OpenAI-compatible provider for Pi.
-// 🎯 Core function: Load smartrouter.env, EnvHttpProxyAgent global dispatcher, registerProvider.
-// 🔗 Key dependencies: @mariozechner/pi-coding-agent, node:fs/path/url/os/module, npm undici.
-// 💡 Usage: Re-exported from .pi/extensions; install deps at repo root; set NO_PROXY for gateway IP.
+// 🎯 Core function: Load smartrouter.env, configure proxy/direct transport, register provider + diagnostics commands.
+// 🔗 Key dependencies: @mariozechner/pi-coding-agent, @mariozechner/pi-ai, node:fs/path/url/os.
+// 💡 Usage: Load globally via ~/.pi/agent/settings.json or run with `pi -e extensions/provider-smartrouter.ts`.
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import {
+  createAssistantMessageEventStream,
+  streamSimpleOpenAICompletions,
+  type AssistantMessageEventStream,
+  type Context,
+  type Model,
+  type SimpleStreamOptions,
+} from "@mariozechner/pi-ai";
 import { existsSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-function loadUndiciSync(): typeof import("undici") | null {
-	const req = createRequire(import.meta.url);
-	let dir = dirname(fileURLToPath(import.meta.url));
-	for (;;) {
-		try {
-			return req(req.resolve("undici", { paths: [dir] }));
-		} catch {
-			/* walk to repo root */
-		}
-		const parent = dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
-	}
-	return null;
-}
+import { configureGlobalProxySupport, withTemporaryDirectFetch } from "./lib/proxy-config.ts";
+
+type Api = "smartrouter-openai-completions";
 
 const SMARTROUTER_PROVIDER_ID = "smartrouter";
+const SMARTROUTER_API_ID: Api = "smartrouter-openai-completions";
 const SMARTROUTER_API_KEY_ENV = "SMARTROUTER_API_KEY";
 const SMARTROUTER_ADMIN_TOKEN_ENV = "SMARTROUTER_ADMIN_TOKEN";
 const SMARTROUTER_ENV_BASENAME = "smartrouter.env";
-const SMARTROUTER_PROXY_ENV_KEYS = ["ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"] as const;
+const SMARTROUTER_USER_AGENT = "PiSmartRouter/0.1";
+const SMARTROUTER_STREAM_TRANSPORT_ENV = "SMARTROUTER_STREAM_TRANSPORT";
 
-/**
- * Parses KEY=value lines from one smartrouter.env file.
- */
+type SmartRouterStreamTransportMode = "direct" | "proxy";
+
+type SmartRouterErrorCode =
+  | "MISSING_API_KEY"
+  | "UNAUTHORIZED"
+  | "FORBIDDEN"
+  | "RATE_LIMITED"
+  | "UNSUPPORTED_MODEL"
+  | "CONNECTION_ERROR"
+  | "INTERNAL_ERROR";
+
+interface ClassifiedSmartRouterError {
+  code: SmartRouterErrorCode;
+  message: string;
+  actionHint: string;
+  retryable: boolean;
+}
+
+function getSmartRouterStreamTransportMode(): SmartRouterStreamTransportMode {
+  const raw = String(process.env[SMARTROUTER_STREAM_TRANSPORT_ENV] || "").trim().toLowerCase();
+  return raw === "direct" ? "direct" : "proxy";
+}
+
+function formatProxyEnv(proxyEnv: Record<string, string>): string {
+  return Object.keys(proxyEnv).length
+    ? Object.entries(proxyEnv).map(([key, value]) => `${key}=${value}`).join(", ")
+    : "not configured";
+}
+
 function parseSmartRouterEnvFile(envPath: string): Record<string, string> {
 	const out: Record<string, string> = {};
 	if (!existsSync(envPath)) return out;
@@ -273,6 +296,17 @@ function getSmartRouterGatewayUrl(baseUrl = getSmartRouterBaseUrl()): string {
   return baseUrl.replace(/\/v1\/?$/i, "");
 }
 
+function getSmartRouterNoProxyHosts(baseUrl = getSmartRouterBaseUrl()): string[] {
+  if (!baseUrl) return [];
+
+  try {
+    const gatewayUrl = new URL(getSmartRouterGatewayUrl(baseUrl));
+    return gatewayUrl.hostname ? [gatewayUrl.hostname] : [];
+  } catch {
+    return [];
+  }
+}
+
 function getSmartRouterApiKey(): string {
   return String(process.env[SMARTROUTER_API_KEY_ENV] || "").trim();
 }
@@ -281,58 +315,10 @@ function getSmartRouterAdminToken(): string {
   return String(process.env[SMARTROUTER_ADMIN_TOKEN_ENV] || "").trim();
 }
 
-function getSmartRouterProxyEnv(): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const key of SMARTROUTER_PROXY_ENV_KEYS) {
-    const value = String(process.env[key] || "").trim();
-    if (value) out[key] = value;
-  }
-  return out;
-}
-
-function configureSmartRouterProxySupport(): Record<string, string> {
-  const proxyEnv = getSmartRouterProxyEnv();
-  const signature = JSON.stringify(proxyEnv);
-  const globalKey = "__pi_vs_cc_smartrouter_proxy_signature__";
-  if ((globalThis as Record<string, unknown>)[globalKey] === signature) return proxyEnv;
-  (globalThis as Record<string, unknown>)[globalKey] = signature;
-
-  const undici = loadUndiciSync();
-  if (!undici) {
-    if (proxyEnv["ALL_PROXY"] || proxyEnv["HTTPS_PROXY"] || proxyEnv["HTTP_PROXY"]) {
-      console.warn(
-        "[SmartRouter] Proxy env is set but `undici` is missing. Run `npm install` or `bun install` in the Pi repo root.",
-      );
-    }
-    return proxyEnv;
-  }
-
-  const { EnvHttpProxyAgent, fetch: undiciFetch, setGlobalDispatcher } = undici;
-
-  // ALL_PROXY is non-standard; normalize to HTTPS_PROXY + HTTP_PROXY before constructing
-  // EnvHttpProxyAgent, which only reads HTTP(S)_PROXY and NO_PROXY from process.env.
-  const allProxy = proxyEnv["ALL_PROXY"];
-  if (allProxy) {
-    if (!process.env.HTTPS_PROXY && !process.env.https_proxy) process.env.HTTPS_PROXY = allProxy;
-    if (!process.env.HTTP_PROXY && !process.env.http_proxy) process.env.HTTP_PROXY = allProxy;
-  }
-
-  // EnvHttpProxyAgent reads HTTPS_PROXY/HTTP_PROXY AND NO_PROXY on every request.
-  // Using it as the global undici dispatcher ensures ALL transports — including Pi's
-  // internal OpenAI SDK streaming transport — automatically bypass SOCKS for hosts
-  // listed in NO_PROXY (e.g. the SmartRouter gateway IP 178.104.47.116).
-  //
-  // A raw ProxyAgent as global dispatcher would route ALL undici traffic (including
-  // long-lived SSE streams) through SOCKS with no NO_PROXY awareness, causing
-  // v2rayn to abort the connection mid-stream ("wsasend aborted").
-  setGlobalDispatcher(new EnvHttpProxyAgent());
-
-  // Patch globalThis.fetch so any code that calls it directly also picks up
-  // the global dispatcher (and thus EnvHttpProxyAgent's NO_PROXY routing).
-  (globalThis as Record<string, unknown>)["fetch"] = (url: RequestInfo, opts?: RequestInit) =>
-    undiciFetch(url, opts as Parameters<typeof undiciFetch>[1]);
-
-  return proxyEnv;
+function configureSmartRouterProxySupport(baseUrl = getSmartRouterBaseUrl()): Record<string, string> {
+  return configureGlobalProxySupport({
+    noProxyHosts: getSmartRouterNoProxyHosts(baseUrl),
+  });
 }
 
 function buildSmartRouterModels() {
@@ -348,8 +334,272 @@ function buildSmartRouterModels() {
   }));
 }
 
+function getResolvedApiKey(options?: SimpleStreamOptions): string | undefined {
+  const direct = options?.apiKey?.trim();
+  if (direct && direct.toUpperCase() !== SMARTROUTER_API_KEY_ENV) return direct;
+  return getSmartRouterApiKey();
+}
+
+function patchProviderMetadata(event: any, provider: string, api: Api) {
+  const patchMessage = (message: any) => {
+    if (!message || typeof message !== "object") return message;
+    return {
+      ...message,
+      provider,
+      api,
+    };
+  };
+
+  if (!event || typeof event !== "object") return event;
+  return {
+    ...event,
+    ...("partial" in event ? { partial: patchMessage(event.partial) } : {}),
+    ...("message" in event ? { message: patchMessage(event.message) } : {}),
+    ...("error" in event ? { error: patchMessage(event.error) } : {}),
+  };
+}
+
+function matchesAnyPattern(value: string, patterns: RegExp[]): boolean {
+  return patterns.some((pattern) => pattern.test(value));
+}
+
+function safeStringify(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function extractErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return safeStringify(error);
+}
+
+function classifySmartRouterError(error: unknown, modelId: string): ClassifiedSmartRouterError {
+  const raw = extractErrorMessage(error);
+  const message = raw.toLowerCase();
+
+  const connectionPatterns = [
+    /\bfetch failed\b/,
+    /\beconnreset\b/,
+    /\beconnrefused\b/,
+    /\betimedout\b/,
+    /\btimeout\b/,
+    /\bterminated\b/,
+    /\baborted?\b/,
+    /\bsocket\b/,
+    /\bconnection (?:error|failed|reset|closed|refused|terminated|timeout)\b/,
+    /\bnetwork error\b/,
+  ];
+
+  if (!raw.trim()) {
+    return {
+      code: "INTERNAL_ERROR",
+      message: "Unknown SmartRouter error.",
+      actionHint: "Retry once. If the problem persists, inspect the gateway response and proxy routing.",
+      retryable: true,
+    };
+  }
+
+  if (message.includes(`missing ${SMARTROUTER_API_KEY_ENV.toLowerCase()}`) || message.includes("missing api key")) {
+    return {
+      code: "MISSING_API_KEY",
+      message: `Missing ${SMARTROUTER_API_KEY_ENV}.`,
+      actionHint: `Set ${SMARTROUTER_API_KEY_ENV} in your environment or .pi/${SMARTROUTER_ENV_BASENAME}.`,
+      retryable: false,
+    };
+  }
+
+  if (
+    message.includes("401") ||
+    message.includes("unauthorized") ||
+    message.includes("incorrect api key") ||
+    message.includes("invalid api key")
+  ) {
+    return {
+      code: "UNAUTHORIZED",
+      message: "SmartRouter rejected the API key.",
+      actionHint: `Verify ${SMARTROUTER_API_KEY_ENV} and retry /smartrouter-test.`,
+      retryable: false,
+    };
+  }
+
+  if (message.includes("403") || message.includes("forbidden") || message.includes("access denied")) {
+    return {
+      code: "FORBIDDEN",
+      message: "The API key is valid but lacks permission for this SmartRouter model or gateway.",
+      actionHint: "Check SmartRouter account permissions and model entitlements.",
+      retryable: false,
+    };
+  }
+
+  if (message.includes("429") || message.includes("rate limit") || message.includes("too many requests") || message.includes("quota")) {
+    return {
+      code: "RATE_LIMITED",
+      message: "Rate limited by SmartRouter.",
+      actionHint: "Back off and retry later.",
+      retryable: true,
+    };
+  }
+
+  if (
+    message.includes("model_not_found") ||
+    message.includes("unsupported model") ||
+    message.includes("invalid model") ||
+    message.includes("does not exist") ||
+    message.includes("not supported")
+  ) {
+    return {
+      code: "UNSUPPORTED_MODEL",
+      message: `The model '${modelId}' is unsupported on this SmartRouter gateway.`,
+      actionHint: "Choose another configured SmartRouter model and retry.",
+      retryable: false,
+    };
+  }
+
+  if (matchesAnyPattern(message, connectionPatterns)) {
+    return {
+      code: "CONNECTION_ERROR",
+      message: `SmartRouter connection failed for '${modelId}'.`,
+      actionHint: "Check proxy/NO_PROXY routing, then compare /smartrouter-test with a direct streaming request.",
+      retryable: true,
+    };
+  }
+
+  return {
+    code: "INTERNAL_ERROR",
+    message: raw,
+    actionHint: "Inspect the SmartRouter gateway response and proxy path, then retry if appropriate.",
+    retryable: true,
+  };
+}
+
+function createErrorEvent(model: Model<Api>, error: unknown) {
+  const classified = classifySmartRouterError(error, model.id);
+  const structured = JSON.stringify({
+    code: classified.code,
+    message: classified.message,
+    action_hint: classified.actionHint,
+    retryable: classified.retryable,
+  });
+
+  return {
+    type: "error" as const,
+    reason: "error" as const,
+    error: {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: SMARTROUTER_PROVIDER_ID,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "error" as const,
+      errorMessage: structured,
+      timestamp: Date.now(),
+    },
+  };
+}
+
+async function forwardInnerStream(params: {
+  stream: AssistantMessageEventStream;
+  model: Model<Api>;
+  context: Context;
+  options?: SimpleStreamOptions;
+  chosenModelId: string;
+  apiKey: string;
+  baseUrl: string;
+}) {
+  const modelWithBaseUrl = {
+    ...params.model,
+    id: params.chosenModelId,
+    baseUrl: params.baseUrl,
+  } as Model<Api>;
+  const transportMode = getSmartRouterStreamTransportMode();
+
+  const runAttempt = async () => {
+    const innerStream = streamSimpleOpenAICompletions(modelWithBaseUrl, params.context, {
+      ...params.options,
+      apiKey: params.apiKey,
+      headers: {
+        ...params.options?.headers,
+        "User-Agent": SMARTROUTER_USER_AGENT,
+      },
+    });
+
+    for await (const event of innerStream) {
+      params.stream.push(patchProviderMetadata(event, SMARTROUTER_PROVIDER_ID, SMARTROUTER_API_ID));
+    }
+  };
+
+  if (transportMode === "direct") {
+    await withTemporaryDirectFetch(runAttempt);
+    return;
+  }
+
+  await runAttempt();
+}
+
+function streamSmartRouter(model: Model<Api>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream {
+  const stream = createAssistantMessageEventStream();
+  let isClosed = false;
+
+  const endStream = () => {
+    if (isClosed) return;
+    isClosed = true;
+    stream.end();
+  };
+
+  const failStream = (error: unknown) => {
+    if (isClosed) return;
+    stream.push(createErrorEvent(model, error));
+    endStream();
+  };
+
+  void (async () => {
+    const apiKey = getResolvedApiKey(options);
+    const baseUrl = getSmartRouterBaseUrl();
+
+    if (!baseUrl) {
+      failStream(new Error("SmartRouter base URL not configured."));
+      return;
+    }
+
+    if (!apiKey) {
+      failStream(new Error(`Missing ${SMARTROUTER_API_KEY_ENV}`));
+      return;
+    }
+
+    try {
+      await forwardInnerStream({
+        stream,
+        model,
+        context,
+        options,
+        chosenModelId: model.id,
+        apiKey,
+        baseUrl,
+      });
+      endStream();
+    } catch (error) {
+      failStream(error);
+    }
+  })().catch(failStream);
+
+  return stream;
+}
+
 async function fetchSmartRouterJson(path: string, token?: string): Promise<{ ok: boolean; status: number; body: any }> {
-  const response = await fetch(`${getSmartRouterGatewayUrl()}${path}`, {
+  const url = `${getSmartRouterGatewayUrl()}${path}`;
+  const response = await fetch(url, {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   });
   const text = await response.text();
@@ -379,17 +629,22 @@ function formatSmartRouterStatusLine(label: string, result: { ok: boolean; statu
 
 export default function providerSmartRouter(pi: ExtensionAPI) {
 	loadSmartRouterEnvFile();
-	const proxyEnv = configureSmartRouterProxySupport();
-
 	const baseUrl = getSmartRouterBaseUrl();
+	const proxyEnv = configureSmartRouterProxySupport(baseUrl);
+	const proxyEnvText = formatProxyEnv(proxyEnv);
+	const registeredModels = buildSmartRouterModels();
+	const bundledModelIds = registeredModels.map((model) => model.id).join(", ");
 
 	if (baseUrl) {
 		pi.registerProvider(SMARTROUTER_PROVIDER_ID, {
 			baseUrl,
 			apiKey: SMARTROUTER_API_KEY_ENV,
-			authHeader: true,
-			api: "openai-completions",
-			models: buildSmartRouterModels(),
+			api: SMARTROUTER_API_ID,
+			headers: {
+				"User-Agent": SMARTROUTER_USER_AGENT,
+			},
+			models: registeredModels,
+			streamSimple: streamSmartRouter,
 		});
 	} else {
 		console.log(
@@ -403,6 +658,7 @@ export default function providerSmartRouter(pi: ExtensionAPI) {
       const baseUrl = getSmartRouterBaseUrl();
       const apiKey = getSmartRouterApiKey();
       const adminToken = getSmartRouterAdminToken();
+      const transportMode = getSmartRouterStreamTransportMode();
       const lines = [
         `Provider: ${SMARTROUTER_PROVIDER_ID}`,
 				baseUrl
@@ -410,8 +666,9 @@ export default function providerSmartRouter(pi: ExtensionAPI) {
 					: `Base URL: not configured (set SMARTROUTER_BASE_URL or SMARTROUTER_URL)`,
         `API key env ${SMARTROUTER_API_KEY_ENV}: ${apiKey ? "set" : "missing"}`,
         `Admin token env ${SMARTROUTER_ADMIN_TOKEN_ENV}: ${adminToken ? "set" : "missing"}`,
-        `Proxy env: ${Object.keys(proxyEnv).length ? Object.entries(proxyEnv).map(([key, value]) => `${key}=${value}`).join(", ") : "not configured"}`,
-        `Bundled models: ${buildSmartRouterModels().map((model) => model.id).join(", ")}`,
+        `Stream transport mode: ${transportMode}`,
+        `Proxy env: ${proxyEnvText}`,
+        `Bundled models: ${bundledModelIds}`,
       ];
 
 			if (baseUrl) {
@@ -461,11 +718,7 @@ export default function providerSmartRouter(pi: ExtensionAPI) {
 	} else {
 		console.log(`[SmartRouter] Provider not registered (no base URL)`);
 	}
-	if (Object.keys(proxyEnv).length > 0) {
-		console.log(`[SmartRouter] Proxy env: ${Object.entries(proxyEnv).map(([key, value]) => `${key}=${value}`).join(", ")}`);
-	} else {
-		console.log("[SmartRouter] Proxy env: not configured");
-	}
+	console.log(`[SmartRouter] Proxy env: ${proxyEnvText}`);
 	pi.registerCommand("smartrouter-test", {
     description: "Send a live inference request via SmartRouter and show the result",
     handler: async (args, ctx) => {
@@ -506,6 +759,4 @@ export default function providerSmartRouter(pi: ExtensionAPI) {
     },
   });
 
-	console.log(`[SmartRouter] Status command: /smartrouter-status`);
-	console.log(`[SmartRouter] Test command:   /smartrouter-test [model-id]`);
 }
