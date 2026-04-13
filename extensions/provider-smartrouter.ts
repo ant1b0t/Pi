@@ -6,7 +6,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
   createAssistantMessageEventStream,
-  streamSimpleOpenAICompletions,
+  streamOpenAICompletions,
   type AssistantMessageEventStream,
   type Context,
   type Model,
@@ -17,7 +17,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { configureGlobalProxySupport, withTemporaryDirectFetch } from "./lib/proxy-config.ts";
+import { getScopedTransport } from "./lib/proxy-config.ts";
 
 type Api = "smartrouter-openai-completions";
 
@@ -56,6 +56,14 @@ function formatProxyEnv(proxyEnv: Record<string, string>): string {
   return Object.keys(proxyEnv).length
     ? Object.entries(proxyEnv).map(([key, value]) => `${key}=${value}`).join(", ")
     : "not configured";
+}
+
+function createScopedFetchHeaders(
+  headers: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  return headers && Object.keys(headers).length > 0
+    ? { ...headers }
+    : undefined;
 }
 
 function parseSmartRouterEnvFile(envPath: string): Record<string, string> {
@@ -315,10 +323,11 @@ function getSmartRouterAdminToken(): string {
   return String(process.env[SMARTROUTER_ADMIN_TOKEN_ENV] || "").trim();
 }
 
-function configureSmartRouterProxySupport(baseUrl = getSmartRouterBaseUrl()): Record<string, string> {
-  return configureGlobalProxySupport({
+function getSmartRouterProxyEnv(baseUrl = getSmartRouterBaseUrl()): Record<string, string> {
+  return getScopedTransport({
+    mode: "proxy",
     noProxyHosts: getSmartRouterNoProxyHosts(baseUrl),
-  });
+  }).proxyEnv;
 }
 
 function buildSmartRouterModels() {
@@ -525,27 +534,24 @@ async function forwardInnerStream(params: {
   } as Model<Api>;
   const transportMode = getSmartRouterStreamTransportMode();
 
-  const runAttempt = async () => {
-    const innerStream = streamSimpleOpenAICompletions(modelWithBaseUrl, params.context, {
-      ...params.options,
-      apiKey: params.apiKey,
-      headers: {
-        ...params.options?.headers,
-        "User-Agent": SMARTROUTER_USER_AGENT,
-      },
-    });
+  const scopedTransport = getScopedTransport({
+    mode: transportMode,
+    noProxyHosts: getSmartRouterNoProxyHosts(params.baseUrl),
+  });
 
-    for await (const event of innerStream) {
-      params.stream.push(patchProviderMetadata(event, SMARTROUTER_PROVIDER_ID, SMARTROUTER_API_ID));
-    }
-  };
+  const innerStream = streamOpenAICompletions(modelWithBaseUrl as any, params.context, {
+    ...params.options,
+    apiKey: params.apiKey,
+    headers: createScopedFetchHeaders({
+      ...params.options?.headers,
+      "User-Agent": SMARTROUTER_USER_AGENT,
+    }),
+    fetch: scopedTransport.fetch,
+  } as any);
 
-  if (transportMode === "direct") {
-    await withTemporaryDirectFetch(runAttempt);
-    return;
+  for await (const event of innerStream) {
+    params.stream.push(patchProviderMetadata(event, SMARTROUTER_PROVIDER_ID, SMARTROUTER_API_ID));
   }
-
-  await runAttempt();
 }
 
 function streamSmartRouter(model: Model<Api>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream {
@@ -630,7 +636,7 @@ function formatSmartRouterStatusLine(label: string, result: { ok: boolean; statu
 export default function providerSmartRouter(pi: ExtensionAPI) {
 	loadSmartRouterEnvFile();
 	const baseUrl = getSmartRouterBaseUrl();
-	const proxyEnv = configureSmartRouterProxySupport(baseUrl);
+	const proxyEnv = getSmartRouterProxyEnv(baseUrl);
 	const proxyEnvText = formatProxyEnv(proxyEnv);
 	const registeredModels = buildSmartRouterModels();
 	const bundledModelIds = registeredModels.map((model) => model.id).join(", ");
