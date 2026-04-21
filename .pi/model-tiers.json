@@ -3,9 +3,9 @@
     "smartrouter/openai-codex/gpt-5.4"
   ],
   "medium": [
-    "smartrouter/qwen/coder-model"
+    "smartrouter/openai-codex/gpt-5.4-mini"
   ],
   "low": [
-    "smartrouter/qwen/coder-model"
+    "smartrouter/openai-codex/gpt-5.4-mini"
   ]
 }
