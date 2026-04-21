@@ -25,6 +25,7 @@ Pi Coding Agent extension examples and experiments.
 - For tool design and contract changes, follow `docs/reference/tool-design-standards.md`
 - Use `docs/agent_context.md` as the short operational summary; read `docs/reference/tool-design-standards.md` when creating tools or changing names, descriptions, schemas, responses, or errors
 - For agent personas in `.pi/agents/*.md`, prefer `tool_profile` over long repeated `tools:` lists when a standard profile fits
+- For SSH keys protected with a passphrase, do not rely on interactive passphrase entry. Create a temporary copy of the key, remove the passphrase only from the temporary copy with `ssh-keygen -p -P <old> -N "" -f <temp_key>`, use that copy for `ssh`/`scp`, then delete it immediately after use. Do not modify the original key unless explicitly required.
 - Commit messages must be written in Russian and answer the question «Что сделано?». Prefer concise formulations in past tense, e.g. `Добавлена ...`, `Обновлена ...`, `Исправлена ...`
 
 ## Provider Extensions
