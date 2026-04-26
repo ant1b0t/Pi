@@ -1,11 +1,11 @@
 {
   "high": [
-    "smartrouter/openai-codex/gpt-5.4"
+    "cpamc/gpt-5.5"
   ],
   "medium": [
-    "smartrouter/openai-codex/gpt-5.4-mini"
+    "cpamc/gpt-5.4-mini"
   ],
   "low": [
-    "smartrouter/openai-codex/gpt-5.4-mini"
+    "cpamc/gpt-5.4-mini"
   ]
 }
