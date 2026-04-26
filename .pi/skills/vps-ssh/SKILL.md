@@ -1,6 +1,6 @@
 ---
 name: vps-ssh
-description: Use when you need to connect to a VPS or remote Linux server over SSH, safely handle passphrase-protected keys via temporary copies, run remote shell commands, inspect server state, or transfer files with scp. Keywords: ssh, scp, vps, server, remote, deploy, passphrase, key, linux.
+description: "Use when you need to connect to a VPS or remote Linux server over SSH, safely handle passphrase-protected keys via temporary copies, run remote shell commands, inspect server state, or transfer files with scp. Keywords: ssh, scp, vps, server, remote, deploy, passphrase, key, linux."
 allowed-tools: Bash
 ---
 
