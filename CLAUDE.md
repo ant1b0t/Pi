@@ -138,6 +138,15 @@ OpenAI-compatible Xiaomi MiMo provider.
 - **Confirmed:** streaming, tool calling, `developer` role, JSON mode, max output `131072`
 - **Note:** `1,048,576` context is still unverified in public official docs
 
+## Caveman Extension
+
+`caveman` is a Pi-native prompt/style extension, not a provider. Upstream JuliusBrussee/caveman is a rules/skills layer with no HTTP API/model backend.
+
+- **Run:** `just ext-caveman` / `just ext-caveman-full`
+- **Commands:** `/caveman`, `/caveman-help`, `/caveman-commit`, `/caveman-review`, `/caveman-compress <file>`
+- **Modes:** `lite`, `full`, `ultra`, `wenyan-lite`, `wenyan`, `wenyan-ultra`, `off`
+- **Optional env:** `CAVEMAN_DEFAULT_MODE=full` (or `off`)
+
 ## UI Extensions
 
 | Extension | Description |
@@ -145,6 +154,7 @@ OpenAI-compatible Xiaomi MiMo provider.
 | `minimal` | Clean UI with model name + context meter |
 | `pure-focus` | Strip footer and status line entirely |
 | `theme-cycler` | Ctrl+X forward, Ctrl+Q backward theme switching |
+| `caveman` | Terse output mode with /caveman lite/full/ultra/wenyan commands |
 | `tool-counter` | Footer with tool call counts |
 | `tool-counter-widget` | Below-editor widget with tool stats |
 | `subagent-widget` | Live streaming progress for /sub command |

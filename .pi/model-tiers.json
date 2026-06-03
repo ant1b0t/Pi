@@ -1,11 +1,15 @@
 {
   "high": [
-    "cpamc/gpt-5.5"
+    "cpamc/gpt-5.5",
+    "fireworks/fw-deepseek-v4-pro",
+    "fireworks/fw-kimi-k2.6",
+    "fireworks/fw-minimax-m2.7",
+    "fireworks/fw-glm-5.1"
   ],
   "medium": [
-    "cpamc/gpt-5.4-mini"
+    "fireworks/fw-deepseek-v4-flash"
   ],
   "low": [
-    "cpamc/gpt-5.4-mini"
+    "fireworks/fw-deepseek-v4-flash"
   ]
 }

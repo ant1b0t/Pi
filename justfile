@@ -78,6 +78,14 @@ ext-session-replay:
 ext-theme-cycler:
     pi -e extensions/examples/theme-cycler.ts -e extensions/examples/minimal.ts
 
+# 16a. Caveman: terse output mode with /caveman commands
+ext-caveman:
+    pi -e extensions/examples/caveman.ts -e extensions/examples/minimal.ts
+
+# 16b. Caveman with base tools (todo, web_fetch, ask_user)
+ext-caveman-full:
+    pi -e extensions/examples/caveman.ts -e extensions/base/base-tools.ts -e extensions/examples/minimal.ts
+
 # 17. Kimi For Coding provider: 256K context, File API, upload tools
 ext-kimi:
     pi -e extensions/provider-kimi.ts -e extensions/examples/minimal.ts
@@ -168,3 +176,4 @@ all:
     just open provider-kimi base-tools minimal
     just open provider-smartrouter minimal
     just open provider-smartrouter base-tools minimal
+    just open caveman minimal

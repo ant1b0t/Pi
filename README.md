@@ -25,7 +25,7 @@ All three are required:
 Pi does **not** auto-load `.env` files — API keys must be present in your shell's environment **before** you launch Pi. A sample file is provided:
 
 ```bash
-cp .env.sample .env   # copy the template
+cp .env.example .env  # copy the template
 # open .env and fill in your keys
 ```
 
@@ -88,6 +88,7 @@ bun install
 | **pi-pi**               | `extensions/examples/pi-pi.ts`               | Meta-agent that builds Pi agents using parallel research experts for documentation                                                                         |
 | **session-replay**      | `extensions/examples/session-replay.ts`      | Scrollable timeline overlay of session history - showcasing customizable dialog UI                                                                         |
 | **theme-cycler**        | `extensions/examples/theme-cycler.ts`        | Keyboard shortcuts (Ctrl+X/Ctrl+Q) and `/theme` command to cycle/switch between custom themes                                                              |
+| **caveman**             | `extensions/examples/caveman.ts`             | Pi-native terse output mode inspired by JuliusBrussee/caveman; `/caveman` switches lite/full/ultra/wenyan modes, plus commit/review/compress commands     |
 | **base-tools**          | `extensions/base/base-tools.ts`               | Core toolset: web_fetch, todo, ask_user, glob                                                                                                              |
 | **base-agents**         | `extensions/base/base-agents.ts`              | Modular sub-agent system: agent_spawn, agent_join, agent_list                                                                                              |
 | **provider-smartrouter** | `extensions/provider-smartrouter.ts`        | SmartRouter OpenAI-compatible provider with Copilot/Codex/Qwen model catalog and `/smartrouter-status`                                                   |
@@ -138,6 +139,8 @@ just ext-agent-chain        # Sequential pipeline orchestrator with step chainin
 just ext-pi-pi              # Meta-agent that builds Pi agents using parallel experts
 just ext-session-replay     # Scrollable timeline overlay of session history
 just ext-theme-cycler       # Theme cycler + minimal footer
+just ext-caveman            # Terse Caveman output mode + minimal footer
+just ext-caveman-full       # Caveman + base tools + minimal footer
 just ext-smartrouter        # SmartRouter provider + minimal footer
 just ext-smartrouter-full   # SmartRouter provider + base-tools + minimal footer
 just all                    # Open every extension in its own terminal window
@@ -149,6 +152,35 @@ For provider extensions, use names like `provider-smartrouter`, `provider-kimi`,
 
 ```bash
 just open purpose-gate minimal tool-counter-widget
+```
+
+### Caveman Mode
+
+Caveman is best connected to Pi as a prompt/style extension, not a provider: upstream caveman has no HTTP API or model backend, it is a rules/skills layer that reduces output tokens.
+
+```bash
+just ext-caveman
+# or with base tools
+just ext-caveman-full
+```
+
+Inside Pi:
+
+```text
+/caveman                 # pick mode
+/caveman lite|full|ultra          # switch intensity
+/caveman wenyan[-lite|-ultra]     # classical terse modes
+/caveman status|help              # diagnostics/help
+/caveman off                      # normal mode
+/caveman-commit                   # prompt-helper: terse commit workflow
+/caveman-review                   # prompt-helper: concise review workflow
+/caveman-compress FILE            # prompt-helper: compress docs/memory file with backup
+```
+
+Optional default:
+
+```bash
+CAVEMAN_DEFAULT_MODE=full # lite | full | ultra | wenyan-lite | wenyan | wenyan-ultra | off
 ```
 
 ---
