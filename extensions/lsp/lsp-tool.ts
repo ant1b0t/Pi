@@ -232,6 +232,22 @@ class LspClient {
 	async diagnostics(filePath: string, langId: string): Promise<unknown[]> {
 		const uri = uriFromFilePath(filePath);
 		await this.ensureOpen(filePath, langId);
+
+		// Try pull-model first (textDocument/diagnostic — supported by TS 5.4+)
+		try {
+			const result = await this.request("textDocument/diagnostic", {
+				textDocument: { uri },
+			});
+			const diags = (result as any)?.items || [];
+			if (diags.length > 0) {
+				this.closeFile(filePath);
+				return diags;
+			}
+		} catch {
+			// Pull model not supported — fall through to push diagnostics
+		}
+
+		// Fallback: use push diagnostics from publishDiagnostics
 		const result = this.diagnostics.get(uri) || [];
 		this.closeFile(filePath);
 		return result;
