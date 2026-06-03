@@ -214,50 +214,79 @@ class LspClient {
 		});
 	}
 
+	private closeFile(filePath: string): void {
+		const uri = uriFromFilePath(filePath);
+		if (!this.openFiles.has(uri)) return;
+		this.openFiles.delete(uri);
+		try {
+			this.notify("textDocument/didClose", { textDocument: { uri } });
+		} catch {
+			/* ignore if crashed */
+		}
+		// Clean up diagnostics for closed file
+		this.diagnostics.delete(uri);
+	}
+
 	// ── Public API ─────────────────────────────────────────────────
 
 	async diagnostics(filePath: string, langId: string): Promise<unknown[]> {
 		const uri = uriFromFilePath(filePath);
 		await this.ensureOpen(filePath, langId);
-		return this.diagnostics.get(uri) || [];
+		const result = this.diagnostics.get(uri) || [];
+		this.closeFile(filePath);
+		return result;
 	}
 
 	async definition(filePath: string, langId: string, line: number, col: number) {
 		const uri = uriFromFilePath(filePath);
 		await this.ensureOpen(filePath, langId);
-		return this.request("textDocument/definition", {
+		const result = await this.request("textDocument/definition", {
 			textDocument: { uri },
 			position: { line: line - 1, character: col - 1 },
 		});
+		this.closeFile(filePath);
+		return result;
 	}
 
 	async references(filePath: string, langId: string, line: number, col: number) {
 		const uri = uriFromFilePath(filePath);
 		await this.ensureOpen(filePath, langId);
-		return this.request("textDocument/references", {
+		const result = await this.request("textDocument/references", {
 			textDocument: { uri },
 			position: { line: line - 1, character: col - 1 },
 			context: { includeDeclaration: true },
 		});
+		this.closeFile(filePath);
+		return result;
 	}
 
 	async hover(filePath: string, langId: string, line: number, col: number) {
 		const uri = uriFromFilePath(filePath);
 		await this.ensureOpen(filePath, langId);
-		return this.request("textDocument/hover", {
+		const result = await this.request("textDocument/hover", {
 			textDocument: { uri },
 			position: { line: line - 1, character: col - 1 },
 		});
+		this.closeFile(filePath);
+		return result;
 	}
 
 	async symbols(filePath: string, langId: string) {
 		const uri = uriFromFilePath(filePath);
 		await this.ensureOpen(filePath, langId);
-		return this.request("textDocument/documentSymbol", { textDocument: { uri } });
+		const result = await this.request("textDocument/documentSymbol", { textDocument: { uri } });
+		this.closeFile(filePath);
+		return result;
 	}
 
 	async shutdown() {
 		this.crashed = true;
+		// Close all remaining open files
+		for (const uri of [...this.openFiles]) {
+			try { this.notify("textDocument/didClose", { textDocument: { uri } }); } catch { /* ignore */ }
+			this.openFiles.delete(uri);
+		}
+		this.diagnostics.clear();
 		try { await this.request("shutdown", {}); } catch { /* ignore */ }
 		try { this.notify("exit", {}); } catch { /* ignore */ }
 		try { this.proc.kill(); } catch { /* ignore */ }
