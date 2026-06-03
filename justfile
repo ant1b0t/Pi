@@ -118,6 +118,17 @@ ext-worktree:
 ext-worktree-full:
     pi -e extensions/worktree/index.ts -e extensions/base/base-tools.ts -e extensions/examples/minimal.ts
 
+# 17f. Swarm: YAML DAG Orchestrator
+#     Parses YAML scene files, builds DAG from `needs`, runs agents in dependency order
+#     Results flow via {{.agentName}} template variables
+#     Scene files go in .pi/scenes/ or use /swarm-run <path>
+ext-swarm:
+    pi -e extensions/swarm/index.ts -e extensions/examples/minimal.ts
+
+# 17g. Swarm with base tools (todo, web_fetch, ask_user, task)
+ext-swarm-full:
+    pi -e extensions/swarm/index.ts -e extensions/base/base-tools.ts -e extensions/examples/minimal.ts
+
 # 17f. SmartRouter provider
 ext-smartrouter:
     pi -e extensions/provider-smartrouter.ts -e extensions/examples/minimal.ts
@@ -185,3 +196,4 @@ all:
     just open provider-smartrouter minimal
     just open provider-smartrouter base-tools minimal
     just open caveman minimal
+    just open swarm minimal

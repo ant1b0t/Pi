@@ -1,0 +1,42 @@
+# parallel-demo.yaml — Parallel Swarm Scene
+# Two independent agents that run in parallel, then one that depends on both.
+#
+# Usage:
+#   /swarm-run .pi/scenes/parallel-demo.yaml
+#   # or via tool: swarm_run scene=".pi/scenes/parallel-demo.yaml"
+
+name: parallel-demo
+description: "Demo of parallel agent execution via DAG"
+
+agents:
+  researcher:
+    agent: scout
+    task: |
+      Research the project structure.
+      Scene: {{.description}}
+      List the top 5 key observations about the codebase.
+    needs: []
+    tags: Bash
+    description: "Explore the codebase"
+
+  planner:
+    agent: planner
+    task: |
+      Based on project structure, produce a plan.
+      Scene: {{.description}}
+      ## Research findings
+      {{.researcher}}
+    needs: [researcher]
+    tags: Web
+    description: "Design the approach"
+
+  reviewer:
+    agent: reviewer
+    task: |
+      Review the following plan:
+      ## Plan
+      {{.planner}}
+      Provide concise feedback.
+    needs: [planner]
+    tags: Bash
+    description: "Review the plan"

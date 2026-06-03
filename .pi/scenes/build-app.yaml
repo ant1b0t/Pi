@@ -1,0 +1,75 @@
+# build-app.yaml — Example Swarm Scene
+# A multi-agent workflow: plan → implement → review
+#
+# Usage:
+#   /swarm-run .pi/scenes/build-app.yaml
+#   # or via tool: swarm_run scene=".pi/scenes/build-app.yaml"
+
+name: build-app
+description: "Build a simple CLI tool with planning, implementation, and review"
+
+agents:
+  # ── 1. Planner ──────────────────────────────────────
+  # Researches the codebase, designs architecture, produces a spec.
+  planner:
+    agent: scout                 # from .pi/agents/scout.md
+    task: |
+      Research the codebase structure and plan the implementation.
+
+      Context: {{.description}}
+
+      Your job:
+      1. Explore the project structure (key dirs, configs, entry points)
+      2. Identify existing patterns, conventions, and architecture
+      3. Design the implementation approach for a new feature
+      4. List specific files that need to be created or modified
+      5. Provide a clear, actionable plan
+
+      Focus on concrete file paths, interfaces, and data flow.
+    needs: []
+    tags: Wr,Web,Bash
+    description: "Research and plan"
+
+  # ── 2. Builder ──────────────────────────────────────
+  # Implements based on the planner's output.
+  builder:
+    agent: builder                # from .pi/agents/builder.md
+    task: |
+      Implement the feature according to the plan.
+
+      ## Scene
+      {{.description}}
+
+      ## Plan from planner
+      {{.planner}}
+
+      Implement what is described above. Follow the plan precisely.
+      Create all necessary files and update existing ones.
+      Run tests to verify correctness after implementation.
+    needs: [planner]
+    tags: Wr,Bash
+    description: "Implement the plan"
+
+  # ── 3. Reviewer ─────────────────────────────────────
+  # Reviews the implementation, checks for issues.
+  reviewer:
+    agent: reviewer               # from .pi/agents/reviewer.md
+    task: |
+      Review the implementation for correctness and quality.
+
+      ## Scene
+      {{.description}}
+
+      ## Implementation to review
+      {{.builder}}
+
+      Check for:
+      - Correctness: does it match the plan?
+      - Code quality: following project conventions?
+      - Edge cases: error handling, input validation?
+      - Tests: adequate coverage?
+
+      Provide a concise review with any issues found.
+    needs: [builder]
+    tags: Wr,Bash
+    description: "Review the implementation"
