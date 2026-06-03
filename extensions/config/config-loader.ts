@@ -27,6 +27,8 @@ import {
 // ── Типы ───────────────────────────────────────────────────────────────
 
 export interface MergedConfig {
+	extensions?: string[];
+	defaultModel?: string;
 	modelTiers?: ModelTiers;
 	agents?: AgentsConfig;
 	tools?: ToolsConfig;
@@ -89,6 +91,8 @@ function envToConfigPath(key: string): string | null {
 		PI_MODEL_TIERS_LOW: "modelTiers.low",
 		PI_AGENTS_INCLUDE_GLOBAL: "agents.includeGlobal",
 		PI_AGENTS_DIRS: "agents.dirs",
+		PI_EXTENSIONS: "extensions",
+		PI_DEFAULT_MODEL: "defaultModel",
 		PI_SWARM_DIR: "swarm.dir",
 		PI_WORKTREE_DIR: "worktree.dir",
 		PI_AST_DIR: "ast.dir",

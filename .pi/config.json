@@ -1,0 +1,11 @@
+{
+  "defaultModel": "opencode/deepseek-v4-pro",
+  "extensions": [
+    "extensions/base/capability-guard.ts",
+    "extensions/base/base-tools.ts",
+    "extensions/base/base-agents.ts",
+    "extensions/worktree/index.ts",
+    "extensions/ast/index.ts",
+    "extensions/swarm/extension.ts"
+  ]
+}

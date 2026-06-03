@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Wrapper that auto-loads extensions and model from .pi/config.json or ~/.pi/config.json.
+# Falls back to raw `pi` if config is missing.
+# All user-provided flags take precedence over config values.
+
+set -euo pipefail
+
+PI_BIN="${PI_BIN:-pi}"
+
+# Parse user args to detect if --model or -e already present
+HAS_MODEL=false
+HAS_EXT=false
+for arg in "$@"; do
+    case "$arg" in
+        --model|-m) HAS_MODEL=true ;;
+        -e) HAS_EXT=true ;;
+    esac
+done
+
+EXTRA_ARGS=()
+
+# Discover config: project first, then global
+for candidate in ".pi/config.json" "$HOME/.pi/config.json"; do
+    if [ -f "$candidate" ]; then
+        # Auto-load extensions from config (only if user didn't pass -e)
+        if [ "$HAS_EXT" = false ]; then
+            while IFS= read -r ext; do
+                [ -n "$ext" ] && EXTRA_ARGS+=("-e" "$ext")
+            done < <(python3 -c "
+import json
+try:
+    with open('$candidate') as f:
+        exts = json.load(f).get('extensions', [])
+    for e in exts:
+        print(e)
+except Exception:
+    pass
+" 2>/dev/null)
+        fi
+
+        # Auto-set model (only if user didn't pass --model)
+        if [ "$HAS_MODEL" = false ]; then
+            MODEL=$(python3 -c "
+import json
+try:
+    with open('$candidate') as f:
+        m = json.load(f).get('defaultModel','')
+    print(m)
+except Exception:
+    pass
+" 2>/dev/null)
+            [ -n "$MODEL" ] && EXTRA_ARGS+=("--model" "$MODEL")
+        fi
+        break
+    fi
+done
+
+exec "$PI_BIN" "${EXTRA_ARGS[@]}" "$@"
