@@ -110,6 +110,14 @@ ext-xiaomi-full:
 ext-opencode-zen-full:
     pi -e extensions/provider-opencode-zen.ts -e extensions/base/base-tools.ts -e extensions/examples/minimal.ts
 
+# 17e. Worktree: isolated git worktree execution (new)
+ext-worktree:
+    pi -e extensions/worktree/index.ts -e extensions/examples/minimal.ts
+
+# 17e. Worktree with base tools (todo, web_fetch, ask_user)
+ext-worktree-full:
+    pi -e extensions/worktree/index.ts -e extensions/base/base-tools.ts -e extensions/examples/minimal.ts
+
 # 17f. SmartRouter provider
 ext-smartrouter:
     pi -e extensions/provider-smartrouter.ts -e extensions/examples/minimal.ts
