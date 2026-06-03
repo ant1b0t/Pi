@@ -51,7 +51,7 @@ class LspClient {
 	private buffer = "";
 	private diagnostics = new Map<string, unknown[]>();
 	private initPromise: Promise<void>;
-	private crashed = false;
+	crashed = false;
 
 	constructor(serverType: ServerType, cwd: string) {
 		const { cmd, args } = SERVER_CMD[serverType];
@@ -129,18 +129,18 @@ class LspClient {
 
 	private _notifiers = new Map<string, (params: any) => void>();
 
-	private onNotification(method: string, fn: (params: any) => void) {
+	onNotification(method: string, fn: (params: any) => void) {
 		this._notifiers.set(method, fn);
 	}
 
-	private send(msg: Record<string, unknown>) {
+	send(msg: Record<string, unknown>) {
 		if (this.crashed) throw new Error("LSP server has crashed");
 		const json = JSON.stringify(msg);
 		const header = `Content-Length: ${Buffer.byteLength(json)}\r\n\r\n`;
 		this.proc.stdin!.write(header + json);
 	}
 
-	private request(method: string, params?: unknown): Promise<unknown> {
+	request(method: string, params?: unknown): Promise<unknown> {
 		return new Promise((resolvePromise, reject) => {
 			const id = ++this.idCounter;
 			const timeout = setTimeout(() => {
@@ -152,7 +152,7 @@ class LspClient {
 		});
 	}
 
-	private notify(method: string, params?: unknown) {
+	notify(method: string, params?: unknown) {
 		this.send({ jsonrpc: "2.0", method, params });
 	}
 
@@ -168,36 +168,63 @@ class LspClient {
 					definition: { linkSupport: true },
 					references: {},
 					documentSymbol: { hierarchicalDocumentSymbolSupport: true },
-					publishDiagnostics: {},
+					diagnostic: { dynamicRegistration: true },
+				},
+				workspace: {
+					diagnostic: { refreshSupport: false },
 				},
 			},
 		});
 		this.notify("initialized", {});
+		// Wait for server readiness (some servers send window/workDoneProgress or similar)
+		await new Promise((r) => setTimeout(r, 200));
 	}
 
 	// ── File operations ────────────────────────────────────────────
 
-	private async openFile(filePath: string, langId: string): Promise<void> {
-		const uri = `file://${filePath}`;
+	private openFiles = new Set<string>();
+
+	private async ensureOpen(filePath: string, langId: string): Promise<void> {
+		const uri = uriFromFilePath(filePath);
+		if (this.openFiles.has(uri)) {
+			// File already open — send didChange to refresh
+			const content = readFileSync(filePath, "utf-8");
+			this.notify("textDocument/didChange", {
+				textDocument: { uri, version: Date.now() },
+				contentChanges: [{ text: content }],
+			});
+			return;
+		}
+		this.openFiles.add(uri);
 		const content = readFileSync(filePath, "utf-8");
 		this.notify("textDocument/didOpen", {
 			textDocument: { uri, languageId: langId, version: 1, text: content },
 		});
-		// Give the server time to publish diagnostics
-		await new Promise((r) => setTimeout(r, 800));
+		// Wait for diagnostics to arrive
+		await new Promise<void>((resolve) => {
+			const start = Date.now();
+			const check = () => {
+				if (this.diagnostics.has(uri) || Date.now() - start > 5000) {
+					resolve();
+				} else {
+					setTimeout(check, 100);
+				}
+			};
+			check();
+		});
 	}
 
 	// ── Public API ─────────────────────────────────────────────────
 
 	async diagnostics(filePath: string, langId: string): Promise<unknown[]> {
-		const uri = `file://${filePath}`;
-		await this.openFile(filePath, langId);
+		const uri = uriFromFilePath(filePath);
+		await this.ensureOpen(filePath, langId);
 		return this.diagnostics.get(uri) || [];
 	}
 
 	async definition(filePath: string, langId: string, line: number, col: number) {
-		const uri = `file://${filePath}`;
-		await this.openFile(filePath, langId);
+		const uri = uriFromFilePath(filePath);
+		await this.ensureOpen(filePath, langId);
 		return this.request("textDocument/definition", {
 			textDocument: { uri },
 			position: { line: line - 1, character: col - 1 },
@@ -205,8 +232,8 @@ class LspClient {
 	}
 
 	async references(filePath: string, langId: string, line: number, col: number) {
-		const uri = `file://${filePath}`;
-		await this.openFile(filePath, langId);
+		const uri = uriFromFilePath(filePath);
+		await this.ensureOpen(filePath, langId);
 		return this.request("textDocument/references", {
 			textDocument: { uri },
 			position: { line: line - 1, character: col - 1 },
@@ -215,8 +242,8 @@ class LspClient {
 	}
 
 	async hover(filePath: string, langId: string, line: number, col: number) {
-		const uri = `file://${filePath}`;
-		await this.openFile(filePath, langId);
+		const uri = uriFromFilePath(filePath);
+		await this.ensureOpen(filePath, langId);
 		return this.request("textDocument/hover", {
 			textDocument: { uri },
 			position: { line: line - 1, character: col - 1 },
@@ -224,19 +251,22 @@ class LspClient {
 	}
 
 	async symbols(filePath: string, langId: string) {
-		const uri = `file://${filePath}`;
-		await this.openFile(filePath, langId);
+		const uri = uriFromFilePath(filePath);
+		await this.ensureOpen(filePath, langId);
 		return this.request("textDocument/documentSymbol", { textDocument: { uri } });
 	}
 
-	dispose() {
-		try {
-			this.proc.kill();
-		} catch {
-			/* ignore */
-		}
+	async shutdown() {
+		this.crashed = true;
+		try { await this.request("shutdown", {}); } catch { /* ignore */ }
+		try { this.notify("exit", {}); } catch { /* ignore */ }
+		try { this.proc.kill(); } catch { /* ignore */ }
 		for (const [, p] of this.pending) clearTimeout(p.timeout);
 		this.pending.clear();
+	}
+
+	dispose() {
+		void this.shutdown();
 	}
 }
 
@@ -247,12 +277,18 @@ const cache = new Map<string, LspClient>();
 function getClient(serverType: ServerType, cwd: string): LspClient {
 	const key = `${cwd}:${serverType}`;
 	let client = cache.get(key);
-	if (!client || (client as any).crashed) {
+	if (!client || client.crashed) {
 		client?.dispose();
 		client = new LspClient(serverType, cwd);
 		cache.set(key, client);
 	}
 	return client;
+}
+
+/** Build a standards-compliant file:// URI from an absolute path. */
+function uriFromFilePath(absolutePath: string): string {
+	const parts = absolutePath.replace(/\\/g, "/").split("/");
+	return "file://" + parts.map(encodeURIComponent).join("/");
 }
 
 // ── Schema ─────────────────────────────────────────────────────────────
@@ -276,7 +312,7 @@ export const LspParams = Type.Object({
 // ── Output formatting ──────────────────────────────────────────────────
 
 function uriToPath(uri: string): string {
-	return uri.replace(/^file:\/\//, "");
+	return decodeURIComponent(uri.replace(/^file:\/\//, ""));
 }
 
 function fmtPos(uri: string, r: any): string {
