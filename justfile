@@ -137,6 +137,14 @@ ext-smartrouter:
 ext-smartrouter-full:
     pi -e extensions/provider-smartrouter.ts -e extensions/base/base-tools.ts -e extensions/examples/minimal.ts
 
+# 17h. OpenCode Go provider: curated open models subscription
+ext-opencode-go:
+    pi -e extensions/provider-opencode-go.ts -e extensions/examples/minimal.ts
+
+# 17i. OpenCode Go with base tools
+ext-opencode-go-full:
+    pi -e extensions/provider-opencode-go.ts -e extensions/base/base-tools.ts -e extensions/examples/minimal.ts
+
 # === BASE AGENTS (Modular Sub-Agent System) ===
 
 # 18. Base Agents: core sub-agent orchestration (agent_spawn, agent_join, agent_list)

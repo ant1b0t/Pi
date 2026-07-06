@@ -30,6 +30,54 @@ Pi Coding Agent extension examples and experiments.
 
 ## Provider Extensions
 
+### `opencode-go` — OpenCode Go Provider
+
+Overrides Pi's built-in `opencode-go` with the up-to-date model list from OpenCode's official docs.
+Go is a $10/month subscription ($5 first month) for curated open coding models.
+
+```bash
+# Quick start
+just ext-opencode-go
+
+# With base tools (todo, web_fetch, ask_user)
+just ext-opencode-go-full
+```
+
+**Features:**
+- **Gateway**: `https://opencode.ai/zen/go/v1`
+- **Protocol**: OpenAI-compatible chat completions
+- **Auth**: Same API key as OpenCode Zen (`OPENCODE_API_KEY`)
+- **Models** (14 curated open models):
+  - `deepseek-v4-flash` · `deepseek-v4-pro`
+  - `glm-5.1` · `glm-5.2`
+  - `kimi-k2.6` · `kimi-k2.7-code`
+  - `minimax-m2.5` · `minimax-m2.7` · `minimax-m3`
+  - `mimo-v2.5` · `mimo-v2.5-pro`
+  - `qwen3.6-plus` · `qwen3.7-max` · `qwen3.7-plus`
+- **Commands**:
+  - `/opencode-go-login`
+  - `/opencode-go-logout`
+  - `/opencode-go-status`
+
+**Setup:**
+```bash
+# 1. Subscribe to Go: https://opencode.ai/auth
+# 2. Add to .env:
+OPENCODE_API_KEY=your-key-here
+
+# Optional
+# OPENCODE_GO_BASE_URL=https://opencode.ai/zen/go/v1
+
+# 3. Run
+just ext-opencode-go
+```
+
+**Notes:**
+- Uses the same API key as OpenCode Zen (`OPENCODE_API_KEY`)
+- Subscription: $5 first month, $10/month thereafter
+- $60/month usage cap with model-specific pricing
+- Falls back to free Zen models if monthly limit reached
+
 ### `opencode-zen` — OpenCode Zen Provider
 
 OpenAI-compatible gateway provider for MiniMax via OpenCode Zen.
