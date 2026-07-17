@@ -71,6 +71,7 @@ import {
 	loadModelTiers,
 	resolveModel,
 	reverseLookupTier,
+	resolveThinkingLevel,
 	currentModelString,
 	modelLabel,
 	type ModelTier,
@@ -132,7 +133,7 @@ const FormatEnum = Type.String({
 });
 
 const TierEnum = Type.String({
-	description: 'Model tier. Allowed: "high" | "medium" | "low". Omit to inherit parent model.',
+	description: 'Model tier and thinking level. Allowed: "high" | "medium" | "low". Omit to inherit parent model with thinking off.',
 });
 
 const NotifyEnum = Type.String({
@@ -217,10 +218,13 @@ agent_wait_any / agent_wait_all: wait for completion; set join:true to return re
 CLI: /agents, /aenter <id>, /akill <id>, /acont <id> <prompt>, /aclear
 
 ## Model tiers
-high: STRICTLY for architecture design, complex planning, and deep algorithmic debugging. DO NOT use for code exploration or web research.
-medium: (Default) Use for exploring codebases, web research, writing tests, and standard feature implementation.
-low: Use for simple text extraction, formatting, fixing typos, and linting.
-When spawning agents, pick tier by task complexity. Omit for parent model.
+Choose the lowest tier that can reliably complete the task. Select by reasoning depth, uncertainty, error impact, and tool-loop shape—not by labels such as "research", "implementation", or repository size alone. Omit tier to inherit the parent model when its quality/cost is already appropriate.
+
+low: Deterministic, bounded work with a clear result and cheap verification: locating or extracting facts, narrow searches, summaries, formatting, lint fixes, mechanical edits, straightforward tests, and simple local fixes. Large input, many files, or long context alone do not require a higher tier.
+medium: Default for non-trivial engineering work: multi-file investigation, standard feature implementation, synthesis of several sources, debugging with multiple hypotheses, non-trivial tests, and adaptive tool loops. Use when correctness requires engineering judgment.
+high: Use only for deep reasoning or costly mistakes: architecture and API design, complex root-cause debugging, competing designs with significant trade-offs, unclear cross-module invariants, security/data/compatibility risks, and long hypothesis-driven loops. Do not use for routine exploration or ordinary web research.
+
+Escalate one tier when evidence is conflicting, non-local invariants must be maintained, the loop is hypothesis-driven, or an incorrect result is costly. De-escalate when the work can be mechanically verified or split into bounded independent subtasks.
 
 ## Phased orchestration
 Use phase labels when the workflow is naturally split:
@@ -906,6 +910,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 			toolList,
 			extensions,
 			model,
+			thinkingLevel: resolveThinkingLevel(state.tier),
 			cwd,
 			isContinuation: state.turnCount > 1,
 			extraEnv: buildAllowedToolsEnv(toolList)
@@ -1154,7 +1159,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 	if (isAllowed("agent_spawn")) pi.registerTool({
 		name: "agent_spawn",
 		label: "Spawn Agent",
-		description: "PRIMARY delegation tool. Spawn a background sub-agent with a persistent session. Returns ID immediately for agent_join. Required: task. Optional: name, tier (high/medium/low), tags, model, notify, format. (Sub-agents ALWAYS have read, glob, grep, find, ls). Prefer this over task for non-trivial work.",
+		description: "PRIMARY delegation tool. Spawn a background sub-agent with a persistent session. Tier selects both model and matching thinking level (low/medium/high); omitted tier inherits the parent model with thinking off. Returns ID immediately for agent_join. (Sub-agents ALWAYS have read, glob, grep, find, ls). Prefer this over task for non-trivial work.",
 		parameters: AgentSpawnParams,
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			activeCtx = ctx;
@@ -1406,7 +1411,8 @@ export default function baseAgents(pi: ExtensionAPI) {
 			const parentModel = currentModelString(ctx.model);
 			const model = resolveModel({ model: params.model, tier: params.tier, tiers: modelTiers, fallback: state.model ?? parentModel });
 			state.model = model;
-			state.tier = params.tier ?? reverseLookupTier(model ?? "", modelTiers) ?? state.tier;
+			const inferredTier = reverseLookupTier(model ?? "", modelTiers);
+			state.tier = params.tier ?? inferredTier ?? (params.model ? undefined : state.tier);
 
 			agents.set(params.id, state);
 			updateAllWidgets();
@@ -1703,7 +1709,8 @@ export default function baseAgents(pi: ExtensionAPI) {
 
 			updateAllWidgets();
 
-			const model = currentModelString(ctx.model);
+			const model = state.model ?? currentModelString(ctx.model);
+			state.model = model;
 			runAgent(state, toolList, model);
 
 			ctx.ui.notify(`Agent #${id} [${state.name}] continuing (Turn ${state.turnCount})…`, "info");

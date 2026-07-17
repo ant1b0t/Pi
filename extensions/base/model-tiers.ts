@@ -23,6 +23,7 @@ import * as path from "node:path";
 // ── Types ──────────────────────────────────────────────────────────────
 
 export type ModelTier = "high" | "medium" | "low";
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface ModelTiers {
 	high: string | string[];
@@ -62,6 +63,14 @@ export function loadModelTiers(cwd: string): ModelTiers | null {
 // ── Resolver ───────────────────────────────────────────────────────────
 
 const tierCounters: Record<ModelTier, number> = { high: 0, medium: 0, low: 0 };
+
+/** Maps a model tier to Pi's thinking level for sub-agent processes. */
+export function resolveThinkingLevel(tier?: ModelTier): ThinkingLevel {
+	if (tier === "high") return "high";
+	if (tier === "medium") return "medium";
+	if (tier === "low") return "low";
+	return "off";
+}
 
 /**
  * Resolves a model string from a tier + loaded tiers config.

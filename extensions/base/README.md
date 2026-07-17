@@ -151,6 +151,15 @@ export default function (pi: ExtensionAPI) {
 }
 ```
 
+Tier одновременно определяет уровень thinking дочернего Pi-процесса:
+
+- `low` → `--thinking low`
+- `medium` → `--thinking medium`
+- `high` → `--thinking high`
+- tier не указан → модель родителя и `--thinking off`
+
+Выбирайте минимальный достаточный tier: `low` для ограниченной и проверяемой работы, `medium` для нетривиальной инженерной работы, `high` для глубокого reasoning или задач с высокой ценой ошибки. Большой контекст или число файлов сами по себе не требуют повышения tier.
+
 ### .pi/agents/*.md
 
 ```markdown

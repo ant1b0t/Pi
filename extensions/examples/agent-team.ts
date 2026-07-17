@@ -24,7 +24,7 @@ import { spawn } from "child_process";
 import { readFileSync, existsSync, mkdirSync, unlinkSync } from "fs";
 import { join } from "path";
 import { applyExtensionDefaults } from "../base/themeMap.ts";
-import { currentModelString, loadModelTiers, resolveModel, type ModelTiers } from "../base/model-tiers.ts";
+import { currentModelString, loadModelTiers, resolveModel, resolveThinkingLevel, type ModelTiers } from "../base/model-tiers.ts";
 import { scanAgentDirs, type AgentDef } from "../base/agent-defs.ts";
 
 // ── Types ────────────────────────────────────────
@@ -291,7 +291,7 @@ export default function (pi: ExtensionAPI) {
 			"--no-extensions",
 			"--model", model,
 			"--tools", state.def.tools,
-			"--thinking", "off",
+			"--thinking", resolveThinkingLevel(state.def.tier),
 			"--append-system-prompt", state.def.systemPrompt,
 			"--session", agentSessionFile,
 		];

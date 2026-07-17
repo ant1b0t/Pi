@@ -36,6 +36,7 @@ import {
 	validateTags,
 } from "./agent-tags.ts";
 import { buildAllowedToolsEnv } from "./allowed-tools.ts";
+import type { ThinkingLevel } from "./model-tiers.ts";
 
 // ── Constants ──────────────────────────────────────────────────────────
 
@@ -219,6 +220,8 @@ export interface SpawnPiOptions {
 	extensions: string[];
 	/** Optional model string, e.g. "anthropic/claude-opus-4-5". */
 	model?: string;
+	/** Pi thinking level selected from the requested model tier. Defaults to "off". */
+	thinkingLevel?: ThinkingLevel;
 	/** Working directory for the subprocess. */
 	cwd: string;
 	/** Pass true to add -c (continue existing session history). */
@@ -251,7 +254,7 @@ export function spawnPiProcess(opts: SpawnPiOptions): ChildProcess {
 		...(opts.isContinuation ? ["-c"] : []),
 		...opts.extensions.flatMap((e) => ["-e", e]),
 		"--tools", toolsArg,
-		"--thinking", "off",
+		"--thinking", opts.thinkingLevel ?? "off",
 	];
 	if (opts.model) args.push("--model", opts.model);
 	args.push(opts.task);

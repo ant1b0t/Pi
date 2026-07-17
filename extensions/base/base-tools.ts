@@ -30,7 +30,7 @@ import { Type } from "@sinclair/typebox";
 import { spawn } from "child_process";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync, readdirSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
-import { currentModelString, loadModelTiers, resolveModel, type ModelTier } from "./model-tiers.ts";
+import { currentModelString, loadModelTiers, resolveModel, resolveThinkingLevel, type ModelTier } from "./model-tiers.ts";
 import {
 	invalidArgument,
 	notFound,
@@ -178,7 +178,7 @@ const TaskParams = Type.Object({
 	description: Type.Optional(Type.String({ description: "Task description" })),
 	tasks: Type.Optional(Type.Array(Type.String({ description: "Task description" }), { description: `Independent tasks to run in parallel (max ${TASK_BATCH_MAX_ITEMS})` })),
 	tools: Type.Optional(Type.String({ description: "Tools (default: read,bash,grep,find,ls)" })),
-	tier: Type.Optional(Type.String({ description: 'Optional model tier for worker(s): "high" | "medium" | "low"' })),
+	tier: Type.Optional(Type.String({ description: 'Optional model tier and thinking level for worker(s): "high" | "medium" | "low"' })),
 	timeout_ms: Type.Optional(Type.Number({ description: `Per-worker timeout in ms (default: ${TASK_TIMEOUT_MS})` })),
 	max_output_chars: Type.Optional(Type.Number({ description: `Max returned output chars per worker (default: ${TASK_OUTPUT_MAX_LENGTH})` })),
 	max_parallel: Type.Optional(Type.Number({ description: `Parallel workers for tasks[] (default: ${TASK_BATCH_DEFAULT_PARALLEL}, max: ${TASK_BATCH_MAX_PARALLEL})` })),
@@ -376,7 +376,7 @@ async function runTaskWorker(options: {
 	const start = Date.now();
 	const piCli = resolvePiCliPath();
 	const resolvedModel = options.model || resolveModel({ tier: options.tier, tiers: loadModelTiers(options.cwd), fallback: undefined });
-	const args = [piCli, "--mode", "json", "-p", "--no-session", "--no-extensions", ...(resolvedModel ? ["--model", resolvedModel] : []), "--tools", options.tools, "--thinking", "off", options.description];
+	const args = [piCli, "--mode", "json", "-p", "--no-session", "--no-extensions", ...(resolvedModel ? ["--model", resolvedModel] : []), "--tools", options.tools, "--thinking", resolveThinkingLevel(options.tier), options.description];
 
 	return await new Promise((resolve) => {
 		const proc = spawn(process.execPath, args, {
@@ -833,7 +833,7 @@ export default function baseTools(pi: ExtensionAPI) {
 							tools,
 							cwd: ctx.cwd,
 							timeoutMs,
-							model: parentModel,
+							model: taskTier ? undefined : parentModel,
 							tier: taskTier,
 							signal,
 							onUpdate: (snapshot) => {
