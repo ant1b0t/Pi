@@ -50,7 +50,7 @@ just ext-opencode-go-full
 - **Models** (14 curated open models):
   - `deepseek-v4-flash` · `deepseek-v4-pro`
   - `glm-5.1` · `glm-5.2`
-  - `kimi-k2.6` · `kimi-k2.7-code`
+  - `grok-4.5` · `kimi-k3`
   - `minimax-m2.5` · `minimax-m2.7` · `minimax-m3`
   - `mimo-v2.5` · `mimo-v2.5-pro`
   - `qwen3.6-plus` · `qwen3.7-max` · `qwen3.7-plus`
@@ -139,7 +139,7 @@ just ext-kimi-full
 ```
 
 **Features:**
-- **Kimi For Coding API**: Anthropic-compatible endpoint (256K context)
+- **Kimi For Coding API**: Anthropic-compatible endpoint (1M context, K3)
 - **File API**: Upload large files via Moonshot File API
 - **Tools**: `kimi_upload` — upload files for efficient processing
 - **Commands**:
@@ -168,9 +168,9 @@ just ext-kimi
 /kimi-files
 ```
 
-**Model:** `kimi-for-coding` (automatically mapped to `k2p5`)
-- Context: 256K tokens
-- Max output: 32K tokens
+**Model:** `kimi-for-coding` → K3
+- Context: 1M tokens
+- Max output: 131K tokens
 - Supports: text, image input
 - Reasoning: enabled
 
