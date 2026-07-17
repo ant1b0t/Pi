@@ -47,9 +47,9 @@ const DOCS_URL = "https://opencode.ai/docs/go";
 
 // ───── OpenCode Go models (from official docs, July 2026) ─────
 //
-// GLM-5.2          Kimi K2.7 Code    MiniMax M3       Qwen3.7 Max
-// GLM-5.1          Kimi K2.6         MiniMax M2.7     Qwen3.7 Plus
-//                                     MiniMax M2.5     Qwen3.6 Plus
+// Grok 4.5          Kimi K3          MiniMax M3       Qwen3.7 Max
+// GLM-5.2                           MiniMax M2.7     Qwen3.7 Plus
+// GLM-5.1                           MiniMax M2.5     Qwen3.6 Plus
 // MiMo-V2.5                          DeepSeek V4 Pro
 // MiMo-V2.5-Pro                      DeepSeek V4 Flash
 //
@@ -83,6 +83,20 @@ const GO_MODELS: Model<Api>[] = [
     compat: { supportsDeveloperRole: false },
   },
 
+  // Grok 4.5
+  {
+    id: "grok-4.5",
+    name: "Grok 4.5 (OpenCode Go)",
+    api: API_ID,
+    provider: PROVIDER_ID,
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 500_000,
+    maxTokens: 128_000,
+    cost: { input: 2.00, output: 6.00, cacheRead: 0.50, cacheWrite: 0 },
+    compat: { supportsDeveloperRole: false },
+  },
+
   // GLM — 5 series
   {
     id: "glm-5.2",
@@ -109,29 +123,17 @@ const GO_MODELS: Model<Api>[] = [
     compat: { supportsDeveloperRole: false },
   },
 
-  // Kimi — K2 series
+  // Kimi — K3
   {
-    id: "kimi-k2.7-code",
-    name: "Kimi K2.7 Code (OpenCode Go)",
+    id: "kimi-k3",
+    name: "Kimi K3 (OpenCode Go)",
     api: API_ID,
     provider: PROVIDER_ID,
     reasoning: true,
     input: ["text"],
-    contextWindow: 262_100,
-    maxTokens: 65_500,
-    cost: { input: 0.95, output: 4.00, cacheRead: 0.19, cacheWrite: 0 },
-    compat: { supportsDeveloperRole: false },
-  },
-  {
-    id: "kimi-k2.6",
-    name: "Kimi K2.6 (OpenCode Go)",
-    api: API_ID,
-    provider: PROVIDER_ID,
-    reasoning: true,
-    input: ["text"],
-    contextWindow: 262_100,
-    maxTokens: 65_500,
-    cost: { input: 0.95, output: 4.00, cacheRead: 0.16, cacheWrite: 0 },
+    contextWindow: 1_000_000,
+    maxTokens: 131_072,
+    cost: { input: 3.00, output: 15.00, cacheRead: 0.30, cacheWrite: 0 },
     compat: { supportsDeveloperRole: false },
   },
 
