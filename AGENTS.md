@@ -1,0 +1,246 @@
+# Pi vs CC — Extension Playground
+
+Pi Coding Agent extension examples and experiments.
+
+## Tooling
+- **Package manager**: `bun` (not npm/yarn/pnpm)
+- **Task runner**: `just` (see justfile)
+- **Extensions run via**: `pi -e extensions/<name>.ts` or `pi -e extensions/<subdir>/<name>.ts`
+
+## Project Structure
+- `extensions/` — Pi extension source files (.ts)
+  - `base/` — Core infrastructure (base-tools, base-agents)
+  - `examples/` — UI and workflow extension examples
+  - `lib/` — Shared libraries and contracts
+- `specs/` — Feature specifications
+- `docs/` — Documentation (comparisons, reference, architecture)
+- `.pi/agents/` — Agent definitions for agent-team extension
+- `.pi/agent-sessions/` — Ephemeral session files (gitignored)
+
+## Conventions
+- Extensions are standalone .ts files loaded by Pi's jiti runtime
+- Available imports: `@mariozechner/pi-coding-agent`, `@mariozechner/pi-tui`, `@mariozechner/pi-ai`, `@sinclair/typebox`, plus any deps in package.json
+- Register tools at the top level of the extension function (not inside event handlers)
+- Use `isToolCallEventType()` for type-safe tool_call event narrowing
+- For tool design and contract changes, follow `docs/reference/tool-design-standards.md`
+- Use `docs/agent_context.md` as the short operational summary; read `docs/reference/tool-design-standards.md` when creating tools or changing names, descriptions, schemas, responses, or errors
+- For agent personas in `.pi/agents/*.md`, prefer `tool_profile` over long repeated `tools:` lists when a standard profile fits
+- For SSH keys protected with a passphrase, do not rely on interactive passphrase entry. Create a temporary copy of the key, remove the passphrase only from the temporary copy with `ssh-keygen -p -P <old> -N "" -f <temp_key>`, use that copy for `ssh`/`scp`, then delete it immediately after use. Do not modify the original key unless explicitly required.
+- Commit messages must be written in Russian and answer the question «Что сделано?». Prefer concise formulations in past tense, e.g. `Добавлена ...`, `Обновлена ...`, `Исправлена ...`
+
+## Provider Extensions
+
+### `opencode-go` — OpenCode Go Provider
+
+Overrides Pi's built-in `opencode-go` with the up-to-date model list from OpenCode's official docs.
+Go is a $10/month subscription ($5 first month) for curated open coding models.
+
+```bash
+# Quick start
+just ext-opencode-go
+
+# With base tools (todo, web_fetch, ask_user)
+just ext-opencode-go-full
+```
+
+**Features:**
+- **Gateway**: `https://opencode.ai/zen/go/v1`
+- **Protocol**: OpenAI-compatible chat completions
+- **Auth**: Same API key as OpenCode Zen (`OPENCODE_API_KEY`)
+- **Models** (14 curated open models):
+  - `deepseek-v4-flash` · `deepseek-v4-pro`
+  - `glm-5.1` · `glm-5.2`
+  - `grok-4.5` · `kimi-k3`
+  - `minimax-m2.5` · `minimax-m2.7` · `minimax-m3`
+  - `mimo-v2.5` · `mimo-v2.5-pro`
+  - `qwen3.6-plus` · `qwen3.7-max` · `qwen3.7-plus`
+- **Commands**:
+  - `/opencode-go-login`
+  - `/opencode-go-logout`
+  - `/opencode-go-status`
+
+**Setup:**
+```bash
+# 1. Subscribe to Go: https://opencode.ai/auth
+# 2. Add to .env:
+OPENCODE_API_KEY=your-key-here
+
+# Optional
+# OPENCODE_GO_BASE_URL=https://opencode.ai/zen/go/v1
+
+# 3. Run
+just ext-opencode-go
+```
+
+**Notes:**
+- Uses the same API key as OpenCode Zen (`OPENCODE_API_KEY`)
+- Subscription: $5 first month, $10/month thereafter
+- $60/month usage cap with model-specific pricing
+- Falls back to free Zen models if monthly limit reached
+
+### `opencode-zen` — OpenCode Zen Provider
+
+OpenAI-compatible gateway provider for MiniMax via OpenCode Zen.
+
+```bash
+# Quick start
+just ext-opencode-zen
+
+# With base tools (todo, web_fetch, ask_user)
+just ext-opencode-zen-full
+```
+
+**Features:**
+- **Gateway**: `https://opencode.ai/zen/v1`
+- **Protocol**: OpenAI-compatible chat completions
+- **Models**:
+  - `minimax-m2.5-free` (default)
+  - `minimax-m2.5` (fallback)
+- **Behavior**:
+  - defaults to free model
+  - falls back to paid model when the free model is unavailable or unsupported
+  - does **not** silently fall back on auth/quota/rate-limit errors
+- **Commands**:
+  - `/opencode-zen-login`
+  - `/opencode-zen-logout`
+  - `/opencode-zen-status`
+
+**Setup:**
+```bash
+# 1. Log in to OpenCode Zen and obtain your token/key:
+#    https://opencode.ai/ru/zen
+# 2. Add to .env:
+OPENCODE_ZEN_API_KEY=your-key-here
+
+# Optional overrides
+OPENCODE_ZEN_BASE_URL=https://opencode.ai/zen/v1
+OPENCODE_ZEN_DEFAULT_MODEL=minimax-m2.5-free
+OPENCODE_ZEN_FALLBACK_MODEL=minimax-m2.5
+
+# 3. Run
+just ext-opencode-zen
+```
+
+**Notes:**
+- Login / token page: https://opencode.ai/ru/zen
+- Uses OpenCode Zen, not OpenCode Go, because MiniMax requires a different protocol surface.
+- Treat `minimax-m2.5-free` as limited-time and unsuitable for sensitive production code without separate confirmation.
+
+### `kimi` — Kimi For Coding Provider
+
+Enhanced provider for Kimi For Coding (256K context) with File API support.
+
+```bash
+# Quick start
+just ext-kimi
+
+# With base tools (todo, web_fetch, ask_user)
+just ext-kimi-full
+```
+
+**Features:**
+- **Kimi For Coding API**: Anthropic-compatible endpoint (1M context, K3)
+- **File API**: Upload large files via Moonshot File API
+- **Tools**: `kimi_upload` — upload files for efficient processing
+- **Commands**:
+  - `/kimi-cleanup` — delete uploaded files
+  - `/kimi-files` — list uploaded files
+
+**Setup:**
+```bash
+# 1. Get API key from https://www.kimi.com/code/console
+# 2. Add to .env:
+KIMI_API_KEY=sk-kimi-...
+
+# 3. Run
+just ext-kimi
+```
+
+**File Upload Usage:**
+```
+# Upload a large file
+/kimi_upload path=/path/to/file.pdf
+
+# Cleanup files after use
+/kimi-cleanup
+
+# List uploaded files
+/kimi-files
+```
+
+**Model:** `kimi-for-coding` → K3
+- Context: 1M tokens
+- Max output: 131K tokens
+- Supports: text, image input
+- Reasoning: enabled
+
+**Testing:** See `specs/provider-kimi-tests.md` for detailed test plan.
+
+### `xiaomi` — Xiaomi MiMo Provider
+
+OpenAI-compatible Xiaomi MiMo provider.
+
+- **Run:** `just ext-xiaomi` / `just ext-xiaomi-full`
+- **Auth:** `XIAOMI_API_KEY` or `/xiaomi-login`
+- **Default model:** `mimo-v2-pro`
+- **Confirmed:** streaming, tool calling, `developer` role, JSON mode, max output `131072`
+- **Note:** `1,048,576` context is still unverified in public official docs
+
+## Caveman Extension
+
+`caveman` is a Pi-native prompt/style extension, not a provider. Upstream JuliusBrussee/caveman is a rules/skills layer with no HTTP API/model backend.
+
+- **Run:** `just ext-caveman` / `just ext-caveman-full`
+- **Commands:** `/caveman`, `/caveman-help`, `/caveman-commit`, `/caveman-review`, `/caveman-compress <file>`
+- **Modes:** `lite`, `full`, `ultra`, `wenyan-lite`, `wenyan`, `wenyan-ultra`, `off`
+- **Optional env:** `CAVEMAN_DEFAULT_MODE=full` (or `off`)
+
+## UI Extensions
+
+| Extension | Description |
+|-----------|-------------|
+| `minimal` | Clean UI with model name + context meter |
+| `pure-focus` | Strip footer and status line entirely |
+| `theme-cycler` | Ctrl+X forward, Ctrl+Q backward theme switching |
+| `caveman` | Terse output mode with /caveman lite/full/ultra/wenyan commands |
+| `tool-counter` | Footer with tool call counts |
+| `tool-counter-widget` | Below-editor widget with tool stats |
+| `subagent-widget` | Live streaming progress for /sub command |
+| `session-replay` | Scrollable timeline overlay of session history |
+
+## Workflow Extensions
+
+| Extension | Description |
+|-----------|-------------|
+| `tilldone` | Task-driven discipline — define tasks before working |
+| `purpose-gate` | Declare intent before working with persistent widget |
+| `agent-team` | Dispatcher orchestrator with team select and grid dashboard |
+| `agent-chain` | Sequential pipeline orchestrator |
+| `cross-agent` | Load commands from .Codex/, .gemini/, .codex/ dirs |
+| `pi-pi` | Meta-agent that builds Pi agents with parallel research |
+
+## Safety Extensions
+
+| Extension | Description |
+|-----------|-------------|
+| `damage-control` | Safety auditing for destructive operations |
+| `system-select` | /system to pick an agent persona |
+
+## Base Tools
+
+`base-tools.ts` adds:
+- `web_fetch` — URL fetching with HTML→Markdown conversion
+- `todo` — Persistent task list with UI widget
+- `ask_user` — Interactive dialogs with options
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and configure:
+
+```bash
+# Required for Kimi provider
+KIMI_API_KEY=sk-your-key-here
+
+# Required for Xiaomi MiMo provider
+XIAOMI_API_KEY=your-key-here
+```
