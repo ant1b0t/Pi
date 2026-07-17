@@ -21,7 +21,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { applyExtensionDefaults } from "./themeMap.ts";
-import { currentModelString, loadModelTiers, resolveModel, type ModelTiers, type ModelTier } from "../base/model-tiers.ts";
+import { currentModelString, loadModelTiers, resolveModel, resolveThinkingLevel, type ModelTiers, type ModelTier } from "../base/model-tiers.ts";
 
 interface SubState {
 	id: number;
@@ -149,10 +149,11 @@ export default function (pi: ExtensionAPI) {
 				"--mode", "json",
 				"-p",
 				"--session", state.sessionFile,   // persistent session for /subcont resumption
+				...(state.turnCount > 1 ? ["-c"] : []),
 				"--no-extensions",
 				"--model", model,
 				"--tools", "read,bash,grep,find,ls",
-				"--thinking", "off",
+				"--thinking", resolveThinkingLevel(state.tier),
 				prompt,
 			], {
 				stdio: ["ignore", "pipe", "pipe"],
