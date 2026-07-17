@@ -7,8 +7,6 @@ __pycache__/
 
 # API keys — never commit real credentials
 .env
-.pi/smartrouter.env
-extensions/smartrouter.env
 
 .pi/agent-sessions/
 .pi/research-cache/

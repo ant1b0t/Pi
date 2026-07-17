@@ -91,7 +91,6 @@ bun install
 | **caveman**             | `extensions/examples/caveman.ts`             | Pi-native terse output mode inspired by JuliusBrussee/caveman; `/caveman` switches lite/full/ultra/wenyan modes, plus commit/review/compress commands     |
 | **base-tools**          | `extensions/base/base-tools.ts`               | Core toolset: web_fetch, todo, ask_user, glob                                                                                                              |
 | **base-agents**         | `extensions/base/base-agents.ts`              | Modular sub-agent system: agent_spawn, agent_join, agent_list                                                                                              |
-| **provider-smartrouter** | `extensions/provider-smartrouter.ts`        | SmartRouter OpenAI-compatible provider with Copilot/Codex/Qwen model catalog and `/smartrouter-status`                                                   |
 
 ---
 
@@ -141,14 +140,12 @@ just ext-session-replay     # Scrollable timeline overlay of session history
 just ext-theme-cycler       # Theme cycler + minimal footer
 just ext-caveman            # Terse Caveman output mode + minimal footer
 just ext-caveman-full       # Caveman + base tools + minimal footer
-just ext-smartrouter        # SmartRouter provider + minimal footer
-just ext-smartrouter-full   # SmartRouter provider + base-tools + minimal footer
 just all                    # Open every extension in its own terminal window
 ```
 
 The `open` recipe allows you to spin up a new terminal window with any combination of stacked extensions (omit `.ts`):
 
-For provider extensions, use names like `provider-smartrouter`, `provider-kimi`, `provider-opencode-zen`, or `provider-xiaomi`.
+For provider extensions, use names like `provider-kimi`, `provider-opencode-zen`, or `provider-xiaomi`.
 
 ```bash
 just open purpose-gate minimal tool-counter-widget
@@ -184,34 +181,6 @@ CAVEMAN_DEFAULT_MODE=full # lite | full | ultra | wenyan-lite | wenyan | wenyan-
 ```
 
 ---
-
-## SmartRouter Provider
-
-Extension source: `extensions/provider-smartrouter.ts`. For always-on usage, add it to `~/.pi/agent/settings.json` under `extensions`.
-
-Configuration lives in:
-- `.pi/smartrouter.env` — local active config (gitignored)
-- `.pi/smartrouter.env.example` — template
-
-Expected variables:
-```bash
-SMARTROUTER_BASE_URL=https://your-smartrouter-host.example
-SMARTROUTER_API_KEY=...
-SMARTROUTER_ADMIN_TOKEN=...
-# Optional: direct | proxy (default: proxy)
-SMARTROUTER_STREAM_TRANSPORT=proxy
-```
-
-Useful commands:
-```bash
-just ext-smartrouter
-just ext-smartrouter-full
-```
-
-Inside Pi:
-```text
-/smartrouter-status
-```
 
 ## Project Structure
 

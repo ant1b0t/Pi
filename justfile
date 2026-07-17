@@ -129,14 +129,6 @@ ext-swarm:
 ext-swarm-full:
     pi -e extensions/swarm/index.ts -e extensions/base/base-tools.ts -e extensions/examples/minimal.ts
 
-# 17f. SmartRouter provider
-ext-smartrouter:
-    pi -e extensions/provider-smartrouter.ts -e extensions/examples/minimal.ts
-
-# 17g. SmartRouter with base tools
-ext-smartrouter-full:
-    pi -e extensions/provider-smartrouter.ts -e extensions/base/base-tools.ts -e extensions/examples/minimal.ts
-
 # 17h. OpenCode Go provider: curated open models subscription
 ext-opencode-go:
     pi -e extensions/provider-opencode-go.ts -e extensions/examples/minimal.ts
@@ -172,7 +164,7 @@ open +exts:
     for ext in {{exts}}; do
         if [[ "$ext" == "base-agents" || "$ext" == "base-tools" ]]; then
             args="$args -e extensions/base/$ext.ts"
-        elif [[ "$ext" == "provider-kimi" || "$ext" == "provider-smartrouter" || "$ext" == "provider-opencode-zen" || "$ext" == "provider-xiaomi" ]]; then
+        elif [[ "$ext" == "provider-kimi" || "$ext" == "provider-opencode-zen" || "$ext" == "provider-xiaomi" ]]; then
             args="$args -e extensions/$ext.ts"
         else
             args="$args -e extensions/examples/$ext.ts"
@@ -201,7 +193,5 @@ all:
     just open pi-pi theme-cycler
     just open provider-kimi minimal
     just open provider-kimi base-tools minimal
-    just open provider-smartrouter minimal
-    just open provider-smartrouter base-tools minimal
     just open caveman minimal
     just open swarm minimal

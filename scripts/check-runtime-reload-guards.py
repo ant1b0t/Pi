@@ -5,7 +5,6 @@ import sys
 TARGETS = [
     Path("extensions/base/base-tools.ts"),
     Path("extensions/base/base-agents.ts"),
-    Path("extensions/provider-smartrouter.ts"),
 ]
 
 patterns = [
