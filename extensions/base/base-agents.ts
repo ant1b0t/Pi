@@ -218,13 +218,13 @@ agent_wait_any / agent_wait_all: wait for completion; set join:true to return re
 CLI: /agents, /aenter <id>, /akill <id>, /acont <id> <prompt>, /aclear
 
 ## Model tiers
-Choose the lowest tier that can reliably complete the task. Select by reasoning depth, uncertainty, error impact, and tool-loop shape—not by labels such as "research", "implementation", or repository size alone. Omit tier to inherit the parent model when its quality/cost is already appropriate.
+Choose the lowest tier that can reliably complete the delegated subtask. The parent model is the lead decision-maker: delegate evidence gathering and bounded engineering work to low/medium, then synthesize important decisions in the parent. Do not mirror the parent model's strength in every sub-agent.
 
-low: Deterministic, bounded work with a clear result and cheap verification: locating or extracting facts, narrow searches, summaries, formatting, lint fixes, mechanical edits, straightforward tests, and simple local fixes. Large input, many files, or long context alone do not require a higher tier.
-medium: Default for non-trivial engineering work: multi-file investigation, standard feature implementation, synthesis of several sources, debugging with multiple hypotheses, non-trivial tests, and adaptive tool loops. Use when correctness requires engineering judgment.
-high: Use only for deep reasoning or costly mistakes: architecture and API design, complex root-cause debugging, competing designs with significant trade-offs, unclear cross-module invariants, security/data/compatibility risks, and long hypothesis-driven loops. Do not use for routine exploration or ordinary web research.
+low: Preferred for reconnaissance and bounded execution: locating or extracting facts, reading many files with a clear question, narrow research, summaries, formatting, lint fixes, mechanical edits, straightforward tests, simple local fixes, and other work with cheap verification. Large input, many files, or long context alone do not require a higher tier.
+medium: Default for nearly all non-trivial delegation: multi-file investigation, standard feature implementation, architecture analysis, synthesis of several sources, debugging with multiple hypotheses, code review, security review, non-trivial tests, and adaptive tool loops. Trust medium to produce recommendations; the parent model reviews and makes final high-impact decisions.
+high: Exceptional only. Use for a narrowly scoped problem that genuinely needs a second frontier-level reasoning pass and cannot be handled well by the parent plus medium agents—for example, a medium attempt failed on an unusually subtle root cause, conflicting medium analyses cannot be reconciled, or an independent review is required for an exceptionally high-stakes security/data invariant. Do not use high merely because a task involves architecture, planning, ambiguity, multiple modules, or costly mistakes.
 
-Escalate one tier when evidence is conflicting, non-local invariants must be maintained, the loop is hypothesis-driven, or an incorrect result is costly. De-escalate when the work can be mechanically verified or split into bounded independent subtasks.
+Prefer decomposing difficult work into low/medium subtasks over spawning high. Escalate to high only after a concrete reason is observed, not pre-emptively. When the parent model is already high-capability, it should normally perform the final reasoning itself.
 
 ## Phased orchestration
 Use phase labels when the workflow is naturally split:
