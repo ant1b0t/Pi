@@ -8,7 +8,8 @@
  *
  * Base URL: https://api.kimi.com/coding
  * Env: KIMI_API_KEY
- * Header: User-Agent: KimiCLI/0.77
+ * Header: User-Agent: KimiCLI/1.0
+ * Latest model: K3 (k3) — 1M context, 131072 max tokens (July 2026)
  */
 
 import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync } from "node:fs";
@@ -384,7 +385,7 @@ function streamKimiForCoding(
       const isKimiModel = model.id === "kimi-for-coding" || model.id === "kimi/kimi-for-coding";
       const modelWithBaseUrl = {
         ...model,
-        id: isKimiModel ? "k2p5" : model.id,
+        id: isKimiModel ? "k3" : model.id,
         baseUrl: normalizeBaseUrl(resolveEnv("KIMI_BASE_URL") || DEFAULT_KIMI_BASE_URL),
       } as Model<"anthropic-messages">;
 
@@ -393,7 +394,7 @@ function streamKimiForCoding(
         apiKey,
         headers: {
           ...options?.headers,
-          "User-Agent": "KimiCLI/0.77",
+          "User-Agent": "KimiCLI/1.0",
         },
       });
 
@@ -446,17 +447,17 @@ export default function (pi: ExtensionAPI) {
     apiKey: "KIMI_API_KEY",
     api: "kimi-for-coding-api",
     headers: {
-      "User-Agent": "KimiCLI/0.77",
+      "User-Agent": "KimiCLI/1.0",
     },
     models: [
       {
         id: "kimi-for-coding",
-        name: "Kimi For Coding",
+        name: "Kimi K3 (For Coding)",
         reasoning: true,
         input: ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 262144,
-        maxTokens: 32768,
+        contextWindow: 1000000,
+        maxTokens: 131072,
         compat: {
           supportsDeveloperRole: false,
           requiresToolResultName: true,
@@ -464,12 +465,12 @@ export default function (pi: ExtensionAPI) {
       },
       {
         id: "kimi/kimi-for-coding",
-        name: "Kimi For Coding (alias)",
+        name: "Kimi K3 (For Coding, alias)",
         reasoning: true,
         input: ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 262144,
-        maxTokens: 32768,
+        contextWindow: 1000000,
+        maxTokens: 131072,
         compat: {
           supportsDeveloperRole: false,
           requiresToolResultName: true,

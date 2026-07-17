@@ -8,8 +8,8 @@ OpenCode-совместимый провайдер Kimi For Coding для Pi.
 - Base URL для Pi: `https://api.kimi.com/coding`
 - API: `anthropic-messages`
 - Ключ: `KIMI_API_KEY`
-- Alias модели: `kimi-for-coding` -> `k2p5`
-- Обязательный заголовок: `User-Agent: KimiCLI/0.77`
+- Alias модели: `kimi-for-coding` -> `k3`
+- Обязательный заголовок: `User-Agent: KimiCLI/1.0`
 
 ## Переменные окружения
 

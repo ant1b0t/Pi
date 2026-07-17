@@ -9,7 +9,7 @@ c['models']['providers']['cpamc'] = {
     'models': [
         {"id":"deepseek-v4-pro","name":"DeepSeek V4 Pro","reasoning":False,"input":["text"],"contextWindow":200000,"maxTokens":32000,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}},
         {"id":"gpt-5.4-mini","name":"GPT 5.4 Mini","reasoning":False,"input":["text"],"contextWindow":200000,"maxTokens":16000,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}},
-        {"id":"kimi-k2.6","name":"Kimi K2.6","reasoning":False,"input":["text"],"contextWindow":200000,"maxTokens":32000,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}},
+        {"id":"kimi-k3","name":"Kimi K3","reasoning":true,"input":["text"],"contextWindow":1000000,"maxTokens":131072,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}},
     ]
 }
 c['agents']['defaults']['model']['primary'] = 'cpamc/deepseek-v4-pro'
