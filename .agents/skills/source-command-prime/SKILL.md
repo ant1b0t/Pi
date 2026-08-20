@@ -16,7 +16,7 @@ Orient yourself in pi-vs-cc — a collection of Pi coding agent extensions and a
 ## Workflow
 
 1. Run `git ls-files --others --cached --exclude-standard` to see the project file tree
-2. Read `justfile`, `THEME.md`
+2. Read `AGENTS.md`, `justfile`
 3. Read `extensions/*`
 4. Read `.pi/agents/*`
 5. Read `.pi/settings.json`, `.pi/themes/synthwave.json`
