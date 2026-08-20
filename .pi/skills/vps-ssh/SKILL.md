@@ -1,7 +1,7 @@
 ---
 name: vps-ssh
 description: "Use when you need to connect to a VPS or remote Linux server over SSH, safely handle passphrase-protected keys via temporary copies, run remote shell commands, inspect server state, or transfer files with scp. Keywords: ssh, scp, vps, server, remote, deploy, passphrase, key, linux."
-allowed-tools: Bash
+allowed-tools: bash
 ---
 
 # VPS SSH Skill
@@ -25,22 +25,17 @@ Project rule from `CLAUDE.md`:
 ### 1) Inspect SSH config
 
 ```bash
-python - <<'PY'
-print(open(r'C:\Users\Asus\.ssh\config', 'r', encoding='utf-8').read())
-PY
+sed -n '1,240p' "$HOME/.ssh/config"
 ```
 
 ### 2) Prepare temporary key copy
 
 ```bash
-python - <<'PY'
-import shutil, subprocess
-src = r'C:\Users\Asus\.ssh\my_key'
-tmp = r'C:\Users\Asus\.ssh\temp_vps_key'
-shutil.copyfile(src, tmp)
-subprocess.run(['ssh-keygen', '-p', '-P', '<PASSPHRASE>', '-N', '', '-f', tmp], check=True)
-print(tmp)
-PY
+pi_ssh_source_key="$HOME/.ssh/my_key"
+pi_ssh_temp_dir="$(mktemp -d)"
+pi_ssh_temp_key="$pi_ssh_temp_dir/key"
+install -m 600 "$pi_ssh_source_key" "$pi_ssh_temp_key"
+ssh-keygen -p -P '<PASSPHRASE>' -N '' -f "$pi_ssh_temp_key"
 ```
 
 ### 3) Verify access
@@ -51,40 +46,37 @@ With SSH alias:
 ssh -o BatchMode=yes -o ConnectTimeout=10 my-vps "echo connected && hostname && whoami"
 ```
 
-With explicit temp key in bash-style environments:
+With explicit temp key:
 
 ```bash
-ssh -i /c/Users/Asus/.ssh/temp_vps_key -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 root@203.0.113.10 "echo connected && hostname && whoami"
+ssh -i "$pi_ssh_temp_key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 root@203.0.113.10 "echo connected && hostname && whoami"
 ```
 
 ### 4) Run remote command
 
 ```bash
-ssh -i /c/Users/Asus/.ssh/temp_vps_key -o IdentitiesOnly=yes root@203.0.113.10 "pwd && uname -a"
+ssh -i "$pi_ssh_temp_key" -o IdentitiesOnly=yes root@203.0.113.10 "pwd && uname -a"
 ```
 
 ### 5) Transfer files
 
 ```bash
-scp -i /c/Users/Asus/.ssh/temp_vps_key ./local.file root@203.0.113.10:/root/
-scp -i /c/Users/Asus/.ssh/temp_vps_key root@203.0.113.10:/root/remote.file ./
+scp -i "$pi_ssh_temp_key" ./local.file root@203.0.113.10:/root/
+scp -i "$pi_ssh_temp_key" root@203.0.113.10:/root/remote.file ./
 ```
 
 ### 6) Cleanup temp key
 
 ```bash
-python - <<'PY'
-from pathlib import Path
-p = Path(r'C:\Users\Asus\.ssh\temp_vps_key')
-p.unlink(missing_ok=True)
-p.with_name(p.name + '.pub').unlink(missing_ok=True)
-print('deleted', p)
-PY
+[ -f "$pi_ssh_temp_key" ] && unlink "$pi_ssh_temp_key"
+[ -f "$pi_ssh_temp_key.pub" ] && unlink "$pi_ssh_temp_key.pub"
+rmdir "$pi_ssh_temp_dir"
+unset pi_ssh_source_key pi_ssh_temp_key pi_ssh_temp_dir
 ```
 
 ## Tips
 
-- In bash on Windows, prefer `/c/Users/...` in `ssh -i` and `scp -i`.
+- Keep the temporary key under the directory created by `mktemp -d`, never beside the original key.
 - If auth fails with `Permission denied (publickey,password)`, check host, user, key, and whether the public key is installed on the server.
 - Use aliases from `~/.ssh/config` when possible.
 
