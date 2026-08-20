@@ -67,8 +67,8 @@ const tierCounters: Record<ModelTier, number> = { high: 0, medium: 0, low: 0 };
 /** Maps a model tier to Pi's thinking level for sub-agent processes. */
 export function resolveThinkingLevel(tier?: ModelTier): ThinkingLevel {
 	if (tier === "high") return "high";
-	if (tier === "medium") return "medium";
-	if (tier === "low") return "low";
+	if (tier === "medium") return "high";
+	if (tier === "low") return "medium";
 	return "off";
 }
 
