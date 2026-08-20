@@ -46,10 +46,6 @@ ext-tilldone:
 
 #g2
 
-# 10. Agent team: dispatcher orchestrator with team select and grid dashboard
-ext-agent-team:
-    pi -e extensions/examples/agent-team.ts -e extensions/examples/theme-cycler.ts
-
 # 11. System select: /system to pick an agent persona as system prompt
 ext-system-select:
     pi -e extensions/examples/system-select.ts -e extensions/examples/minimal.ts -e extensions/examples/theme-cycler.ts
@@ -57,10 +53,6 @@ ext-system-select:
 # 12. Launch with Damage-Control safety auditing
 ext-damage-control:
     pi -e extensions/examples/damage-control.ts -e extensions/examples/minimal.ts -e extensions/examples/theme-cycler.ts
-
-# 13. Agent chain: sequential pipeline orchestrator
-ext-agent-chain:
-    pi -e extensions/examples/agent-chain.ts -e extensions/examples/theme-cycler.ts
 
 #g3
 
@@ -123,11 +115,11 @@ ext-worktree-full:
 #     Results flow via {{.agentName}} template variables
 #     Scene files go in .pi/scenes/ or use /swarm-run <path>
 ext-swarm:
-    pi -e extensions/swarm/index.ts -e extensions/examples/minimal.ts
+    pi -e extensions/swarm/extension.ts -e extensions/examples/minimal.ts
 
 # 17g. Swarm with base tools (todo, web_fetch, ask_user, task)
 ext-swarm-full:
-    pi -e extensions/swarm/index.ts -e extensions/base/base-tools.ts -e extensions/examples/minimal.ts
+    pi -e extensions/swarm/extension.ts -e extensions/base/base-tools.ts -e extensions/examples/minimal.ts
 
 # 17h. OpenCode Go provider: curated open models subscription
 ext-opencode-go:
@@ -162,18 +154,25 @@ open +exts:
     #!/usr/bin/env bash
     args=""
     for ext in {{exts}}; do
-        if [[ "$ext" == "base-agents" || "$ext" == "base-tools" ]]; then
-            args="$args -e extensions/base/$ext.ts"
-        elif [[ "$ext" == "provider-kimi" || "$ext" == "provider-opencode-zen" || "$ext" == "provider-xiaomi" ]]; then
-            args="$args -e extensions/$ext.ts"
-        else
-            args="$args -e extensions/examples/$ext.ts"
-        fi
+        case "$ext" in
+            pi) ;;
+            base-agents|base-tools) args="$args -e extensions/base/$ext.ts" ;;
+            provider-*) args="$args -e extensions/$ext.ts" ;;
+            swarm) args="$args -e extensions/swarm/extension.ts" ;;
+            ast|lsp|worktree) args="$args -e extensions/$ext/index.ts" ;;
+            *) args="$args -e extensions/examples/$ext.ts" ;;
+        esac
     done
     cmd="cd '{{justfile_directory()}}' && pi$args"
-    escaped="${cmd//\\/\\\\}"
-    escaped="${escaped//\"/\\\"}"
-    osascript -e "tell application \"Terminal\" to do script \"$escaped\""
+    if command -v gnome-terminal >/dev/null 2>&1; then
+        gnome-terminal -- bash -lc "$cmd; exec bash"
+    elif command -v osascript >/dev/null 2>&1; then
+        escaped="${cmd//\\/\\\\}"
+        escaped="${escaped//\"/\\\"}"
+        osascript -e "tell application \"Terminal\" to do script \"$escaped\""
+    else
+        exec bash -lc "$cmd"
+    fi
 
 # Open every extension in its own terminal window
 all:
