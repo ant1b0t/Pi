@@ -3,5 +3,8 @@
   "prompts": [
     "../.claude/commands"
   ],
+  "themes": [
+    "!themes/*.json"
+  ],
   "extensions": []
 }

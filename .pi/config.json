@@ -1,5 +1,5 @@
 {
-  "defaultModel": "opencode/deepseek-v4-pro",
+  "defaultModel": "cpamc/gpt-5.6-terra",
   "extensions": [
     "extensions/base/capability-guard.ts",
     "extensions/base/base-tools.ts",
