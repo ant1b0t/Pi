@@ -47,13 +47,15 @@ just ext-opencode-go-full
 - **Gateway**: `https://opencode.ai/zen/go/v1`
 - **Protocol**: OpenAI-compatible chat completions
 - **Auth**: Same API key as OpenCode Zen (`OPENCODE_API_KEY`)
-- **Models** (14 curated open models):
+- **Models** (11 latest versions):
   - `deepseek-v4-flash` · `deepseek-v4-pro`
-  - `glm-5.1` · `glm-5.2`
-  - `grok-4.5` · `kimi-k3`
-  - `minimax-m2.5` · `minimax-m2.7` · `minimax-m3`
+  - `glm-5.3`
+  - `grok-4.5` · `gpt-5.6-luna`
+  - `kimi-k3`
+  - `minimax-m3`
   - `mimo-v2.5` · `mimo-v2.5-pro`
-  - `qwen3.6-plus` · `qwen3.7-max` · `qwen3.7-plus`
+  - `qwen3.8-max`
+  - `hy3`
 - **Commands**:
   - `/opencode-go-login`
   - `/opencode-go-logout`
@@ -80,7 +82,7 @@ just ext-opencode-go
 
 ### `opencode-zen` — OpenCode Zen Provider
 
-OpenAI-compatible gateway provider for MiniMax via OpenCode Zen.
+OpenAI-compatible gateway provider using OpenCode Zen's current free DeepSeek Flash model.
 
 ```bash
 # Quick start
@@ -94,8 +96,8 @@ just ext-opencode-zen-full
 - **Gateway**: `https://opencode.ai/zen/v1`
 - **Protocol**: OpenAI-compatible chat completions
 - **Models**:
-  - `minimax-m2.5-free` (default)
-  - `minimax-m2.5` (fallback)
+  - `deepseek-v4-flash-free` (default)
+  - `deepseek-v4-flash` (fallback)
 - **Behavior**:
   - defaults to free model
   - falls back to paid model when the free model is unavailable or unsupported
@@ -114,8 +116,8 @@ OPENCODE_ZEN_API_KEY=your-key-here
 
 # Optional overrides
 OPENCODE_ZEN_BASE_URL=https://opencode.ai/zen/v1
-OPENCODE_ZEN_DEFAULT_MODEL=minimax-m2.5-free
-OPENCODE_ZEN_FALLBACK_MODEL=minimax-m2.5
+OPENCODE_ZEN_DEFAULT_MODEL=deepseek-v4-flash-free
+OPENCODE_ZEN_FALLBACK_MODEL=deepseek-v4-flash
 
 # 3. Run
 just ext-opencode-zen
@@ -123,8 +125,8 @@ just ext-opencode-zen
 
 **Notes:**
 - Login / token page: https://opencode.ai/ru/zen
-- Uses OpenCode Zen, not OpenCode Go, because MiniMax requires a different protocol surface.
-- Treat `minimax-m2.5-free` as limited-time and unsuitable for sensitive production code without separate confirmation.
+- Uses the OpenCode Zen OpenAI-compatible protocol surface.
+- Treat `deepseek-v4-flash-free` as limited-time and unsuitable for sensitive production code without separate confirmation.
 
 ### `kimi` — Kimi For Coding Provider
 

@@ -45,16 +45,17 @@ const USER_AGENT = "PiOpenCodeGo/0.1";
 const LOGIN_URL = "https://opencode.ai/auth";
 const DOCS_URL = "https://opencode.ai/docs/go";
 
-// ───── OpenCode Go models (from official docs, July 2026) ─────
+// ───── OpenCode Go models (from official docs, August 2026) ─────
+// Only the latest version of each model family is kept.
 //
-// Grok 4.5          Kimi K3          MiniMax M3       Qwen3.7 Max
-// GLM-5.2                           MiniMax M2.7     Qwen3.7 Plus
-// GLM-5.1                           MiniMax M2.5     Qwen3.6 Plus
-// MiMo-V2.5                          DeepSeek V4 Pro
-// MiMo-V2.5-Pro                      DeepSeek V4 Flash
+// DeepSeek V4 Pro/Flash   GPT 5.6 Luna   GLM-5.3     Kimi K3
+// MiniMax M3              MiMo-V2.5      MiMo-V2.5-Pro
+// Qwen3.8 Max             Hy3 (Tencent)  Grok 4.5
 //
-// Deprecated (still in Go pricing table, removed from model list):
-//   minimax-m2.5 — will be removed from Go on Aug 5, 2026
+// Superseded versions removed: glm-5.1/5.2, kimi-k2.6/k2.7-code,
+// minimax-m2.5/m2.7, qwen3.6-plus/3.7-plus/3.7-max.
+// Extra IDs exposed by the API but not documented/guaranteed in Go:
+//   kimi-k2.5, glm-5, qwen3.5-plus, mimo-v2-pro, mimo-v2-omni, hy3-preview
 
 const GO_MODELS: Model<Api>[] = [
   // DeepSeek — V4 series
@@ -67,7 +68,7 @@ const GO_MODELS: Model<Api>[] = [
     input: ["text"],
     contextWindow: 1_000_000,
     maxTokens: 384_000,
-    cost: { input: 1.74, output: 3.48, cacheRead: 0.0145, cacheWrite: 0 },
+    cost: { input: 0.435, output: 0.87, cacheRead: 0.0036, cacheWrite: 0 },
     compat: { supportsDeveloperRole: false },
   },
   {
@@ -93,37 +94,40 @@ const GO_MODELS: Model<Api>[] = [
     input: ["text"],
     contextWindow: 500_000,
     maxTokens: 128_000,
-    cost: { input: 2.00, output: 6.00, cacheRead: 0.50, cacheWrite: 0 },
+    cost: { input: 2.00, output: 6.00, cacheRead: 0.30, cacheWrite: 0 },
     compat: { supportsDeveloperRole: false },
   },
 
-  // GLM — 5 series
+  // GPT-5.6 Luna (nano tier)
   {
-    id: "glm-5.2",
-    name: "GLM-5.2 (OpenCode Go)",
+    id: "gpt-5.6-luna",
+    name: "GPT 5.6 Luna (OpenCode Go)",
+    api: API_ID,
+    provider: PROVIDER_ID,
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: 1_050_000,
+    maxTokens: 128_000,
+    // Cost for ≤272K input; >272K: $0.40/$1.80, cacheWrite $0.50
+    cost: { input: 0.20, output: 1.20, cacheRead: 0.02, cacheWrite: 0.25 },
+    compat: { supportsDeveloperRole: false },
+  },
+
+  // GLM — 5.3 (latest)
+  {
+    id: "glm-5.3",
+    name: "GLM-5.3 (OpenCode Go)",
     api: API_ID,
     provider: PROVIDER_ID,
     reasoning: true,
     input: ["text"],
-    contextWindow: 202_800,
-    maxTokens: 32_800,
-    cost: { input: 1.40, output: 4.40, cacheRead: 0.26, cacheWrite: 0 },
-    compat: { supportsDeveloperRole: false },
-  },
-  {
-    id: "glm-5.1",
-    name: "GLM-5.1 (OpenCode Go)",
-    api: API_ID,
-    provider: PROVIDER_ID,
-    reasoning: true,
-    input: ["text"],
-    contextWindow: 202_800,
-    maxTokens: 32_800,
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
     cost: { input: 1.40, output: 4.40, cacheRead: 0.26, cacheWrite: 0 },
     compat: { supportsDeveloperRole: false },
   },
 
-  // Kimi — K3
+  // Kimi — K3 (latest)
   {
     id: "kimi-k3",
     name: "Kimi K3 (OpenCode Go)",
@@ -137,7 +141,7 @@ const GO_MODELS: Model<Api>[] = [
     compat: { supportsDeveloperRole: false },
   },
 
-  // MiniMax — M3/M2 series
+  // MiniMax — M3 (latest)
   {
     id: "minimax-m3",
     name: "MiniMax M3 (OpenCode Go)",
@@ -148,30 +152,6 @@ const GO_MODELS: Model<Api>[] = [
     contextWindow: 204_800,
     maxTokens: 131_072,
     cost: { input: 0.30, output: 1.20, cacheRead: 0.06, cacheWrite: 0 },
-    compat: { supportsDeveloperRole: false },
-  },
-  {
-    id: "minimax-m2.7",
-    name: "MiniMax M2.7 (OpenCode Go)",
-    api: API_ID,
-    provider: PROVIDER_ID,
-    reasoning: true,
-    input: ["text"],
-    contextWindow: 204_800,
-    maxTokens: 131_072,
-    cost: { input: 0.30, output: 1.20, cacheRead: 0.06, cacheWrite: 0 },
-    compat: { supportsDeveloperRole: false },
-  },
-  {
-    id: "minimax-m2.5",
-    name: "MiniMax M2.5 (OpenCode Go)",
-    api: API_ID,
-    provider: PROVIDER_ID,
-    reasoning: true,
-    input: ["text"],
-    contextWindow: 204_800,
-    maxTokens: 65_500,
-    cost: { input: 0.30, output: 1.20, cacheRead: 0.06, cacheWrite: 0.375 },
     compat: { supportsDeveloperRole: false },
   },
 
@@ -197,45 +177,35 @@ const GO_MODELS: Model<Api>[] = [
     input: ["text"],
     contextWindow: 1_000_000,
     maxTokens: 128_000,
-    cost: { input: 1.74, output: 3.48, cacheRead: 0.0145, cacheWrite: 0 },
+    cost: { input: 0.435, output: 0.87, cacheRead: 0.0036, cacheWrite: 0 },
     compat: { supportsDeveloperRole: false },
   },
 
-  // Qwen — 3.7/3.6 series
+  // Qwen — 3.8 Max (latest)
   {
-    id: "qwen3.7-max",
-    name: "Qwen3.7 Max (OpenCode Go)",
+    id: "qwen3.8-max",
+    name: "Qwen3.8 Max (OpenCode Go)",
     api: API_ID,
     provider: PROVIDER_ID,
     reasoning: true,
-    input: ["text"],
-    contextWindow: 262_100,
-    maxTokens: 65_500,
-    cost: { input: 2.50, output: 7.50, cacheRead: 0.50, cacheWrite: 3.125 },
+    input: ["text", "image", "video"],
+    contextWindow: 1_000_000,
+    maxTokens: 131_072,
+    cost: { input: 2.00, output: 6.00, cacheRead: 0.25, cacheWrite: 2.50 },
     compat: { supportsDeveloperRole: false },
   },
+
+  // Hy3 — Tencent Hy3 (Hunyuan 3)
   {
-    id: "qwen3.7-plus",
-    name: "Qwen3.7 Plus (OpenCode Go)",
+    id: "hy3",
+    name: "Hy3 (OpenCode Go)",
     api: API_ID,
     provider: PROVIDER_ID,
     reasoning: true,
     input: ["text"],
-    contextWindow: 262_100,
-    maxTokens: 65_500,
-    cost: { input: 0.40, output: 1.60, cacheRead: 0.04, cacheWrite: 0.50 },
-    compat: { supportsDeveloperRole: false },
-  },
-  {
-    id: "qwen3.6-plus",
-    name: "Qwen3.6 Plus (OpenCode Go)",
-    api: API_ID,
-    provider: PROVIDER_ID,
-    reasoning: true,
-    input: ["text"],
-    contextWindow: 262_100,
-    maxTokens: 65_500,
-    cost: { input: 0.50, output: 3.00, cacheRead: 0.05, cacheWrite: 0.625 },
+    contextWindow: 262_144,
+    maxTokens: 128_000,
+    cost: { input: 0.14, output: 0.58, cacheRead: 0.035, cacheWrite: 0 },
     compat: { supportsDeveloperRole: false },
   },
 ];

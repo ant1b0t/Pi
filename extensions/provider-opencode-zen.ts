@@ -44,12 +44,12 @@ const DEFAULT_MODEL_ENV = "OPENCODE_ZEN_DEFAULT_MODEL";
 const FALLBACK_MODEL_ENV = "OPENCODE_ZEN_FALLBACK_MODEL";
 const API_ID: Api = "opencode-zen-openai-completions";
 const DEFAULT_BASE_URL = "https://opencode.ai/zen/v1";
-const DEFAULT_MODEL = "minimax-m2.5-free";
-const FALLBACK_MODEL = "minimax-m2.5";
+const DEFAULT_MODEL = "deepseek-v4-flash-free";
+const FALLBACK_MODEL = "deepseek-v4-flash";
 const AUTH_FILE = "opencode-zen-auth.json";
 const USER_AGENT = "PiOpenCodeZen/0.1";
 const LOGIN_URL = "https://opencode.ai/ru/zen";
-const DOCS_URL = "https://platform.minimax.io/docs/coding-plan/opencode";
+const DOCS_URL = "https://opencode.ai/zen";
 const PROD_WARNING =
   "The free model is treated as limited-time and not suitable for sensitive production code without separate confirmation.";
 
@@ -230,7 +230,7 @@ function classifyError(error: unknown, modelId: string): ClassifiedError {
     return {
       code: "FORBIDDEN",
       message: "The API key is valid but lacks permission for this model or gateway.",
-      actionHint: "Check account entitlements for OpenCode Zen and MiniMax access.",
+      actionHint: "Check account entitlements for the selected OpenCode Zen model.",
       retryable: false,
       allowFallback: false,
     };
@@ -245,7 +245,7 @@ function classifyError(error: unknown, modelId: string): ClassifiedError {
     const isQuota = message.includes("quota") || message.includes("insufficient_quota") || message.includes("credit");
     return {
       code: isQuota ? "QUOTA_EXCEEDED" : "RATE_LIMITED",
-      message: isQuota ? "Quota exceeded for OpenCode Zen / MiniMax." : "Rate limited by OpenCode Zen.",
+      message: isQuota ? "Quota exceeded for OpenCode Zen." : "Rate limited by OpenCode Zen.",
       actionHint: isQuota
         ? "Wait for quota reset or switch manually to an entitled paid path after confirming cost implications."
         : "Back off and retry later. Automatic fallback is intentionally disabled for rate-limit cases.",
@@ -384,17 +384,17 @@ function buildModelDefinition(id: string) {
   return {
     id,
     name: isPrimaryFree
-      ? "MiniMax M2.5 Free (OpenCode Zen)"
+      ? "DeepSeek V4 Flash Free (OpenCode Zen)"
       : isPrimaryPaid
-        ? "MiniMax M2.5 (OpenCode Zen)"
+        ? "DeepSeek V4 Flash (OpenCode Zen)"
         : `${id} (OpenCode Zen)`,
     reasoning: true,
     input: ["text"] as ("text")[],
     cost: isFree
       ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
       : { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.12 },
-    contextWindow: 200000,
-    maxTokens: 8192,
+    contextWindow: 1000000,
+    maxTokens: 131072,
     compat: {
       supportsDeveloperRole: false,
     },
@@ -488,7 +488,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("opencode-zen-login", {
-    description: "Save OpenCode Zen API key for the MiniMax OpenAI-compatible gateway",
+    description: "Save an API key for the OpenCode Zen OpenAI-compatible gateway",
     handler: async (_args, ctx) => {
       if (!ctx.hasUI) {
         ctx.ui?.notify(`Interactive login requires UI. Set ${API_KEY_ENV} in your environment or .env file.`, "error");
