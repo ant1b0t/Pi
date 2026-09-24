@@ -1,14 +1,11 @@
 {
   "high": [
-    "cpamc/gpt-5.6-sol",
-    "cpamc/gpt-5.6-terra"
+    "cpamc/gpt-6-sol"
   ],
   "medium": [
-    "opencode-go/deepseek-v4-pro",
-    "cpamc/gpt-5.6-luna"
+    "cpamc/gpt-6-luna"
   ],
   "low": [
-    "opencode-go/deepseek-v4-flash",
-    "cpamc/gpt-5.6-luna"
+    "cpamc/gpt-6-luna"
   ]
 }

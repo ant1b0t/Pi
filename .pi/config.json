@@ -1,5 +1,5 @@
 {
-  "defaultModel": "cpamc/gpt-5.6-terra",
+  "defaultModel": "cpamc/gpt-6-sol",
   "extensions": [
     "extensions/base/capability-guard.ts",
     "extensions/base/base-tools.ts",
