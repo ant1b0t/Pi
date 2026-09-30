@@ -153,8 +153,8 @@ export default function (pi: ExtensionAPI) {
 
 Tier одновременно определяет уровень thinking дочернего Pi-процесса:
 
-- `low` → `--thinking low`
-- `medium` → `--thinking medium`
+- `low` → `--thinking high`
+- `medium` → `--thinking xhigh`
 - `high` → `--thinking high`
 - tier не указан → модель родителя и `--thinking off`
 

@@ -99,8 +99,8 @@
 
 ### 3.3 Функция `resolveThinkingLevel()`
 - [ ] `tier: "high"` — Возвращает `"high"`
-- [ ] `tier: "medium"` — Возвращает `"medium"`
-- [ ] `tier: "low"` — Возвращает `"low"`
+- [ ] `tier: "medium"` — Возвращает `"xhigh"`
+- [ ] `tier: "low"` — Возвращает `"high"`
 - [ ] Tier отсутствует — Возвращает `"off"`
 
 ### 3.4 Функция `reverseLookupTier()`
@@ -161,8 +161,8 @@
 ## 5. Модуль `base-agents.ts`
 
 ### 5.1 Инструмент `agent_spawn`
-- [ ] `tier: "low"` запускает модель low tier с `--thinking low`
-- [ ] `tier: "medium"` запускает модель medium tier с `--thinking medium`
+- [ ] `tier: "low"` запускает модель low tier с `--thinking high`
+- [ ] `tier: "medium"` запускает модель medium tier с `--thinking xhigh`
 - [ ] `tier: "high"` запускает модель high tier с `--thinking high`
 - [ ] Guidance назначает `medium` основным уровнем нетривиальной делегации
 - [ ] Guidance разрешает `high` только после конкретного основания для исключительной эскалации
