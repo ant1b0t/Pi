@@ -8,12 +8,12 @@
   ],
   "extensions": [],
   "enabledModels": [
-    "cpamc/gpt-6-sol",
+    "cpamc/gpt-6.1-sol",
     "cpamc/gpt-6-luna",
     "cpamc/gpt-6-astra"
   ],
   "modelThinkingLevels": {
-    "cpamc/gpt-6-sol": "high",
+    "cpamc/gpt-6.1-sol": "high",
     "cpamc/gpt-6-luna": "high",
     "cpamc/gpt-6-astra": "high"
   }
