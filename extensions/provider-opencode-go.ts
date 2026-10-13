@@ -513,9 +513,4 @@ export default function (pi: ExtensionAPI) {
       );
     },
   });
-
-  console.log(`[OpenCode Go] Registered provider ${PROVIDER_ID}`);
-  console.log(`[OpenCode Go] Base URL: ${baseUrl}`);
-  console.log(`[OpenCode Go] Models: ${GO_MODELS.length} curated open models`);
-  console.log(`[OpenCode Go] Commands: /opencode-go-login, /opencode-go-logout, /opencode-go-status`);
 }
