@@ -82,7 +82,7 @@
 | Session persistence | ❌ | ❌ | ✅ (JSONL files) |
 | Agent list UI | ❌ | ✅ | ✅ `/agents`, widgets |
 | Kill agent | ❌ | ❌ | ✅ `/akill <id>` |
-| Timeout protection | ❌ | ❌ | ✅ (15 min) |
+| Timeout protection | ❌ | ❌ | ✅ (20 min) |
 | Polling interval | ❌ | ❌ | ✅ (500ms) |
 
 ### Productivity Tools

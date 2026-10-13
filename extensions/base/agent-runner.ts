@@ -41,7 +41,7 @@ import type { ThinkingLevel } from "./model-tiers.ts";
 // ── Constants ──────────────────────────────────────────────────────────
 
 /** Wall-clock limit for agent_join / runAgent timeout. */
-export const AGENT_JOIN_TIMEOUT_MS = 15 * 60 * 1000;
+export const AGENT_JOIN_TIMEOUT_MS = 20 * 60 * 1000;
 
 /** Delay between SIGTERM and SIGKILL on Unix. */
 export const SIGKILL_DELAY_MS = 3000;

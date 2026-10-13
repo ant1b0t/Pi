@@ -22,7 +22,7 @@
  * Single shared timer: one setInterval updates ALL widgets simultaneously.
  * Per-agent timers caused Pi to reorder widgets (visual "jumping").
  *
- * agent_join timeout: 15-minute wall-clock limit.
+ * agent_join timeout: 20-minute wall-clock limit.
  * Prevents the main agent being blocked forever if a subprocess hangs.
  */
 
@@ -193,7 +193,7 @@ const AgentContinueParams = Type.Object({
 
 const AgentWaitParams = Type.Object({
 	ids: Type.Optional(Type.Array(Type.Number(), { description: "Optional list of agent IDs to wait for. If omitted, waits for ALL running agents." })),
-	timeoutMs: Type.Optional(Type.Number({ description: "Wait timeout in ms. Default: 15 min." })),
+	timeoutMs: Type.Optional(Type.Number({ description: "Wait timeout in ms. Default: 20 min." })),
 	join: Type.Optional(Type.Boolean({ description: "If true, return joined result(s) directly for completed agents." })),
 	format: Type.Optional(FormatEnum),
 	artifact: Type.Optional(Type.Boolean({ description: "If true, save joined full output(s) to artifact file(s)." })),
@@ -210,7 +210,7 @@ const AgentListParams = Type.Object({});
 const ORCHESTRATOR_GUIDANCE = `
 ## Agents
 spawn: async, parallel task → ID (immediate)
-join: wait for agent → output (timeout 15min, Escape cancel)
+join: wait for agent → output (timeout 20min, Escape cancel)
 result: read completion result of a finished agent without waiting
 continue: resume session (history preserved, turn+1)
 list: all agents + status
@@ -469,7 +469,7 @@ function renderAgentBlock(
 		detail = agent.resultJoined ? "✓ joined" : `✓ awaiting join · use agent_join(${agent.id})`;
 		detailColor = "success";
 	}
-	else if (agent.timedOut) { detailPrefix = "      "; detail = "⏱ timed out (15 min limit)"; detailColor = "error"; }
+	else if (agent.timedOut) { detailPrefix = "      "; detail = "⏱ timed out (20 min limit)"; detailColor = "error"; }
 	else if (agent.killed) { detailPrefix = "      "; detail = "⊘ killed by user"; detailColor = "warning"; }
 	else if (agent.status === "error" && !agent.timedOut && !agent.killed) {
 		detailPrefix = "err:  ";
@@ -733,7 +733,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 		const completion = readCompletionEnvelope(state.sessionFile, state.runSeq);
 		if (state.timedOut) {
 			return {
-				content: [{ type: "text", text: `Agent #${state.id} timed out (exceeded 15 minute limit).` }],
+				content: [{ type: "text", text: `Agent #${state.id} timed out (exceeded 20 minute limit).` }],
 				isError: true,
 			};
 		}
@@ -920,7 +920,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 		let buf = "";
 		ensureTimer();
 
-		// Safety timeout: kill if still running after 15 minutes.
+		// Safety timeout: kill if still running after 20 minutes.
 		// Prevents the main agent from being permanently blocked in agent_join.
 		const timeoutId = setTimeout(() => {
 			if (state.status === "running") {
@@ -1246,7 +1246,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 	if (isAllowed("agent_join")) pi.registerTool({
 		name: "agent_join",
 		label: "Join Agent",
-		description: "Wait for sub-agent to finish and return its output. Use this after agent_spawn for any delegated work that matters to your response. Optionally save the full output to an artifact file. Times out after 15 min. Required: id (number). Repeat calls are allowed.",
+		description: "Wait for sub-agent to finish and return its output. Use this after agent_spawn for any delegated work that matters to your response. Optionally save the full output to an artifact file. Times out after 20 min. Required: id (number). Repeat calls are allowed.",
 		parameters: AgentJoinParams,
 		async execute(_id, params, signal, _onUpdate, ctx) {
 			const state = agents.get(params.id);
@@ -1273,7 +1273,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 						scheduleForceKill(state.proc);
 					}
 					return {
-						content: [{ type: "text", text: `agent_join timed out waiting for agent #${params.id} (15 min limit). Agent has been terminated.` }],
+						content: [{ type: "text", text: `agent_join timed out waiting for agent #${params.id} (20 min limit). Agent has been terminated.` }],
 						isError: true,
 					};
 				}

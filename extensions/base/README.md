@@ -194,7 +194,7 @@ You are a scout agent. Explore and report.
 
 ```typescript
 // agent-runner.ts
-AGENT_JOIN_TIMEOUT_MS = 15 * 60 * 1000  // 15 минут
+AGENT_JOIN_TIMEOUT_MS = 20 * 60 * 1000  // 20 минут
 WIDGET_UPDATE_INTERVAL_MS = 1000         // 1 сек
 SIGKILL_DELAY_MS = 3000                  // 3 сек до SIGKILL
 ```
