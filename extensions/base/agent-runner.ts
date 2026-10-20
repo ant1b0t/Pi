@@ -40,7 +40,8 @@ import type { ThinkingLevel } from "./model-tiers.ts";
 
 // ── Constants ──────────────────────────────────────────────────────────
 
-/** Wall-clock limit for agent_join / runAgent timeout. */
+/** Default wait limit for agent_join/wait tools (not a BaseAgents execution deadline).
+ * Also retained as Swarm's existing execution limit for compatibility. */
 export const AGENT_JOIN_TIMEOUT_MS = 20 * 60 * 1000;
 
 /** Delay between SIGTERM and SIGKILL on Unix. */

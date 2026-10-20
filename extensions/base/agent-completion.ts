@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { extractTerminalResultFromFile } from "./agent-events.ts";
 
 export type AgentCompletionOutcome = "success" | "error" | "tool-only" | "interrupted";
+export type AgentInterruptionReason = "runtime_budget" | "user_kill" | "parent_shutdown";
 
 export interface AgentCompletionEnvelope {
 	version: 1;
@@ -15,6 +16,11 @@ export interface AgentCompletionEnvelope {
 	status: "done" | "error";
 	outcome: AgentCompletionOutcome;
 	finalText: string;
+	partialText?: string;
+	interruptionReason?: AgentInterruptionReason;
+	runtimeBudgetMs?: number;
+	/** Last observed stdout/stderr event, not proof of useful task progress. */
+	lastActivityAt?: number;
 	lastError: string | null;
 	turnCount: number;
 	toolCount: number;
@@ -28,6 +34,7 @@ export interface CompletionLikeState {
 	runSeq: number;
 	status: "running" | "done" | "error";
 	lastAssistantText: string;
+	currentStreamText?: string;
 	lastErrorMessage: string;
 	turnCount: number;
 	toolCount: number;
@@ -36,6 +43,9 @@ export interface CompletionLikeState {
 	sessionFile: string;
 	killed: boolean;
 	timedOut: boolean;
+	interruptionReason?: AgentInterruptionReason;
+	runtimeBudgetMs?: number;
+	lastActivityAt?: number;
 	lastTool?: { name: string; args: string };
 }
 
@@ -48,27 +58,31 @@ export function getCompletionFilePath(sessionFile: string, runSeq?: number): str
 }
 
 export function buildCompletionEnvelope(state: CompletionLikeState, exitCode: number | null): AgentCompletionEnvelope {
-	const terminal = extractTerminalResultFromFile(state.sessionFile);
+	const interrupted = state.killed || state.timedOut;
+	// Reused sessions contain previous runs. Continuations use only this process's events.
+	const terminal = interrupted || state.runSeq > 1 ? undefined : extractTerminalResultFromFile(state.sessionFile);
 	let outcome: AgentCompletionOutcome = "success";
-	let finalText = state.lastAssistantText || "";
+	let finalText = interrupted ? "" : state.lastAssistantText || "";
 	let lastError = state.lastErrorMessage || null;
 
-	if (state.killed || state.timedOut) {
+	if (interrupted) {
 		outcome = "interrupted";
-	} else if (terminal.kind === "error" || state.status === "error") {
+	} else if (terminal?.kind === "error" || state.status === "error") {
 		outcome = "error";
-		lastError = terminal.error || state.lastErrorMessage || null;
-	} else if (terminal.kind === "tool-only") {
+		lastError = terminal?.error || state.lastErrorMessage || null;
+	} else if (!finalText && terminal?.kind !== "text" && (terminal?.kind === "tool-only" || state.toolCount > 0)) {
 		outcome = "tool-only";
 	} else {
 		outcome = "success";
 	}
 
-	if (!finalText) {
-		if (terminal.kind === "text") finalText = terminal.text || "";
-		else if (terminal.kind === "error") finalText = "";
-		else if (terminal.kind === "tool-only") finalText = "";
+	if (!interrupted && !finalText) {
+		if (terminal?.kind === "text") finalText = terminal.text || "";
+		else if (terminal?.kind === "error") finalText = "";
+		else if (terminal?.kind === "tool-only") finalText = "";
 	}
+
+	const partialText = interrupted ? state.currentStreamText || state.lastAssistantText || undefined : undefined;
 
 	return {
 		version: 1,
@@ -76,11 +90,15 @@ export function buildCompletionEnvelope(state: CompletionLikeState, exitCode: nu
 		agentName: state.name,
 		runSeq: state.runSeq,
 		finishedAt: new Date().toISOString(),
-		elapsedMs: state.elapsed || Math.max(0, Date.now() - state.startTime),
+		elapsedMs: Math.max(0, Date.now() - state.startTime),
 		exitCode,
 		status: state.status === "running" ? (exitCode === 0 && !state.killed ? "done" : "error") : state.status,
 		outcome,
 		finalText,
+		...(partialText ? { partialText } : {}),
+		...(interrupted && state.interruptionReason ? { interruptionReason: state.interruptionReason } : {}),
+		runtimeBudgetMs: state.runtimeBudgetMs ?? 0,
+		lastActivityAt: state.lastActivityAt,
 		lastError,
 		turnCount: state.turnCount,
 		toolCount: state.toolCount,
@@ -102,18 +120,15 @@ export function persistCompletionEnvelope(state: CompletionLikeState, exitCode: 
 }
 
 export function readCompletionEnvelope(sessionFile: string, runSeq?: number): AgentCompletionEnvelope | undefined {
-	const candidates = [
-		getCompletionFilePath(sessionFile, runSeq),
-		getCompletionFilePath(sessionFile),
-	];
-	for (const file of candidates) {
-		if (!existsSync(file)) continue;
-		try {
-			const parsed = JSON.parse(readFileSync(file, "utf-8"));
-			if (parsed && parsed.version === 1) return parsed as AgentCompletionEnvelope;
-		} catch {
-			// fall through to next candidate/current logic
+	const file = getCompletionFilePath(sessionFile, runSeq);
+	if (!existsSync(file)) return undefined;
+	try {
+		const parsed = JSON.parse(readFileSync(file, "utf-8"));
+		if (parsed && parsed.version === 1 && (runSeq === undefined || parsed.runSeq === runSeq)) {
+			return parsed as AgentCompletionEnvelope;
 		}
+	} catch {
+		// Ignore missing or malformed completion files.
 	}
 	return undefined;
 }

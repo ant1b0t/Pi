@@ -82,7 +82,8 @@
 | Session persistence | ❌ | ❌ | ✅ (JSONL files) |
 | Agent list UI | ❌ | ✅ | ✅ `/agents`, widgets |
 | Kill agent | ❌ | ❌ | ✅ `/akill <id>` |
-| Timeout protection | ❌ | ❌ | ✅ (20 min) |
+| Wait timeout | ❌ | ❌ | ✅ (20 min default; `timeoutMs` configurable, does not stop agent) |
+| Execution deadline | ❌ | ❌ | Optional (`runtimeBudgetMs`; unlimited by default) |
 | Polling interval | ❌ | ❌ | ✅ (500ms) |
 
 ### Productivity Tools

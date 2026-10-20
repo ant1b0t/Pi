@@ -12,6 +12,17 @@
 
 ## Запуск тестов
 
+### Автоматические lifecycle/completion tests
+
+Запуск без обращений к модели/API:
+
+```bash
+bun test specs/base-agents-lifecycle.test.ts specs/agent-completion.test.ts --timeout 30000
+just check-runtime-reload-guards
+```
+
+Lifecycle-тесты используют подставной дочерний процесс; completion-тесты проверяют частичные результаты и привязку к run sequence. Пути `base-agents.unit.test.ts` и `base-agents.integration.test.ts`, встречающиеся в старых инструкциях/скриптах, отсутствуют; используйте команды выше.
+
 ### Ручное тестирование
 
 ```bash
@@ -110,12 +121,11 @@ it("tests full agent lifecycle", async () => {
 
 ## CI/CD интеграция
 
-Пока для `base-agents` в репозитории актуальны в первую очередь:
+Проверки для `base-agents`:
+- lifecycle/completion: `bun test specs/base-agents-lifecycle.test.ts specs/agent-completion.test.ts --timeout 30000`
+- runtime reload guards: `just check-runtime-reload-guards`
 - ручные smoke/regression сценарии из `base-agents-quick-test.md`
 - расширенный чек-лист из `base-agents-tests.md`
-- проверка `python scripts/check-runtime-reload-guards.py`
-
-Если в проект позже будут добавлены реальные unit/integration tests, сюда стоит вернуть конкретные CI-команды.
 
 ## Отладка
 

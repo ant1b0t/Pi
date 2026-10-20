@@ -18,4 +18,7 @@
 - Ask the user instead of guessing when multiple interpretations are valid.
 - Prefer read/search/list before mutate.
 - Keep retries, batching, deduplication, and orchestration in code when possible.
+- For agent orchestration, delegate bounded, independently verifiable outcomes—not an entire backend/client/test pipeline. Include enough context, contracts, allowed files, stop criteria, and checks for independent work.
+- Use 2–3 independent workers when useful, not as a fixed count; don't fragment tiny tasks. Run dependent work sequentially, assign shared files one owner, and serialize heavy builds/tests. Parent integrates results, reads the diff, and verifies.
+- Prefer `agent_wait_any(join:true)` for independent workers; reserve wait-all for integration barriers. Reuse a worker with `agent_continue` for bounded fixes; use a new worker for independent review or different expertise.
 - Use the full `reference/tool-design-standards.md` when creating or changing tool contracts.

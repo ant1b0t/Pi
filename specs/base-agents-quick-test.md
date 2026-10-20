@@ -15,6 +15,16 @@ agent_list
 agent_join id=1
 ```
 
+Проверка timeout ожидания отдельно:
+```
+agent_spawn tags="Bash" task="sleep 3 && echo done" name="wait-timeout"
+agent_join id=1 timeoutMs=100
+agent_list
+agent_join id=1
+```
+
+**Ожидаемый результат:** первый `agent_join` возвращает timeout, не останавливая агента; статус остаётся running, следующий join получает итог.
+
 **Ожидаемый результат:**
 - ID присвоен (начинается с 1)
 - Статус: running → done
@@ -61,7 +71,7 @@ agent_result id=1 runSeq=2
 
 **Примечание:**
 - Этот сценарий надёжен в рамках живой runtime-сессии Pi.
-- В отдельных headless / print-mode запусках continuation может не сработать, если session files уже очищены при `session_shutdown`.
+- После `session_shutdown` continuation из другой runtime-сессии не гарантирован: файлы сессии могут сохраниться, но автоматически не загружаются.
 
 ### 5. Обработка ошибок
 ```
@@ -149,6 +159,16 @@ agent_wait_all ids=[1,2] join=true
 - `agent_wait_any` возвращает первый завершившийся результат inline
 - `agent_wait_all` возвращает все результаты inline
 
+### 12. Бюджет выполнения и прерванный результат
+```
+agent_spawn tags="Bash" task="sleep 3 && echo done" runtimeBudgetMs=100 name="budgeted"
+agent_join id=1
+agent_result id=1
+agent_continue id=1 prompt="Inspect existing files and effects before deciding whether to continue"
+```
+
+**Ожидаемый результат:** истечение явно заданного бюджета возвращает partial result с диагностикой. Continuation только явный; перед ним проверить файлы и уже совершённые side effects. Без `runtimeBudgetMs` дедлайна нет; continuation без параметра наследует бюджет, `runtimeBudgetMs=0` очищает его.
+
 ## Проверка файлов
 
 ```bash
@@ -191,6 +211,8 @@ pi -e extensions/base/base-agents.ts --no-extensions
 - [ ] `/akill` завершает работающего агента
 - [ ] `/agents` показывает виджет
 - [ ] `/akill` убивает по ID
-- [ ] `/aclear` очищает завершённых
+- [ ] `/aclear` скрывает только виджеты завершённых/ошибочных; работающие видимы
+- [ ] После `/aclear` прежние ID доступны в `agent_list` и `/agents`; `agent_result` и `agent_join` возвращают результаты
+- [ ] После `/aclear` новый запуск не возвращает скрытые виджеты, а `agent_continue` возвращает виджет продолженного агента
 - [ ] Сессии сохраняются в `.pi/agent-sessions/`
 - [ ] Теги корректно разрешаются в инструменты

@@ -9,7 +9,7 @@
  * User commands:
  *   /agents       — Overlay showing all agents + their status
  *   /akill <id>   — Kill a running agent
- *   /aclear       — Remove all finished/errored agents from UI
+ *   /aclear       — Hide finished/errored widgets; retain agents and results
  *
  * === INFRASTRUCTURE ===
  * Process spawning, session management, event parsing and output formatting
@@ -22,8 +22,8 @@
  * Single shared timer: one setInterval updates ALL widgets simultaneously.
  * Per-agent timers caused Pi to reorder widgets (visual "jumping").
  *
- * agent_join timeout: 20-minute wall-clock limit.
- * Prevents the main agent being blocked forever if a subprocess hangs.
+ * Waiting is bounded independently of execution; a wait timeout never kills an agent.
+ * Explicit runtimeBudgetMs optionally limits execution; interrupted sessions can be continued.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -39,8 +39,9 @@ import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { ADVERTISED_TAGS_DESCRIPTION, resolveTagsToTools } from "./agent-tags.ts";
 import { validateDelegationPrompt } from "./delegation-guard.ts";
+import { invalidArgument } from "./tool-contract.ts";
 import { ALLOWED_TOOLS_ENV, buildAllowedToolsEnv } from "./allowed-tools.ts";
-import { persistCompletionEnvelope, readCompletionEnvelope } from "./agent-completion.ts";
+import { getCompletionFilePath, persistCompletionEnvelope, readCompletionEnvelope, type AgentInterruptionReason } from "./agent-completion.ts";
 import { buildPhaseGuidance, normalizePhase, type AgentWorkPhase, validatePhaseTransition } from "./coordinator-mode.ts";
 import { buildForkContextPrompt, normalizeForkContextMode, normalizeSpawnMode, type AgentSpawnMode, type ForkContextMode } from "./fork-context.ts";
 import {
@@ -58,7 +59,6 @@ import {
 	SESSION_FILE_RETRY_DELAY_MS,
 	WIDGET_UPDATE_INTERVAL_MS,
 	canonicalizeToolList,
-	cleanSessionDir,
 	formatAgentOutputDetailed,
 	killProcess,
 	makeSessionFile,
@@ -85,6 +85,8 @@ interface SubAgentState {
 	name: string;
 	status: "running" | "done" | "error";
 	resultJoined: boolean;
+	/** Screen visibility only; hidden agents remain available to tools and /agents. */
+	widgetHidden?: boolean;
 	task: string;
 	// lastAssistantText: text from the most recent assistant message (final answer)
 	lastAssistantText: string;
@@ -96,6 +98,8 @@ interface SubAgentState {
 	proc?: ChildProcess;
 	killed: boolean;
 	timedOut: boolean;
+	runtimeBudgetMs: number;
+	interruptionReason?: AgentInterruptionReason;
 	lastTool?: { name: string; args: string };
 	stderrLines: string[];
 	/** Comma-separated tool list (for agent_continue to reuse). */
@@ -162,6 +166,7 @@ const AgentSpawnParams = Type.Object({
 	notify: Type.Optional(NotifyEnum),
 	phase: Type.Optional(PhaseEnum),
 	mode: Type.Optional(SpawnModeEnum),
+	runtimeBudgetMs: Type.Optional(Type.Integer({ minimum: 0, maximum: 2147483647, description: "Maximum runtime in ms. 0 disables the deadline; omitted defaults to 0." })),
 	context: Type.Optional(ForkContextEnum),
 	contextTurns: Type.Optional(Type.Number({ description: "Recent parent turns to include in fork mode. Default: 6." })),
 	contextMaxChars: Type.Optional(Type.Number({ description: "Max forked context characters. Default: 12000." })),
@@ -171,6 +176,7 @@ const AgentJoinParams = Type.Object({
 	id: Type.Number({ description: "Agent ID" }),
 	format: Type.Optional(FormatEnum),
 	artifact: Type.Optional(Type.Boolean({ description: "If true, save the full agent output to an artifact file and return a preview + absolute path." })),
+	timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 2147483647, description: "Wait timeout in ms. Default: 20 min. Stops waiting; does not stop the agent." })),
 });
 
 const AgentResultParams = Type.Object({
@@ -189,11 +195,12 @@ const AgentContinueParams = Type.Object({
 	model: Type.Optional(Type.String({ description: "Explicit model string (overrides tier)" })),
 	notify: Type.Optional(NotifyEnum),
 	phase: Type.Optional(PhaseEnum),
+	runtimeBudgetMs: Type.Optional(Type.Integer({ minimum: 0, maximum: 2147483647, description: "Maximum runtime in ms. 0 clears the deadline; omitted inherits the prior budget." })),
 });
 
 const AgentWaitParams = Type.Object({
 	ids: Type.Optional(Type.Array(Type.Number(), { description: "Optional list of agent IDs to wait for. If omitted, waits for ALL running agents." })),
-	timeoutMs: Type.Optional(Type.Number({ description: "Wait timeout in ms. Default: 20 min." })),
+	timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 2147483647, description: "Wait timeout in ms. Default: 20 min. Stops waiting; does not stop agents." })),
 	join: Type.Optional(Type.Boolean({ description: "If true, return joined result(s) directly for completed agents." })),
 	format: Type.Optional(FormatEnum),
 	artifact: Type.Optional(Type.Boolean({ description: "If true, save joined full output(s) to artifact file(s)." })),
@@ -210,11 +217,12 @@ const AgentListParams = Type.Object({});
 const ORCHESTRATOR_GUIDANCE = `
 ## Agents
 spawn: async, parallel task → ID (immediate)
-join: wait for agent → output (timeout 20min, Escape cancel)
+join: wait for agent → output (default wait timeout 20min; timeout never kills agent, Escape cancels)
 result: read completion result of a finished agent without waiting
 continue: resume session (history preserved, turn+1)
 list: all agents + status
-agent_wait_any / agent_wait_all: wait for completion; set join:true to return results directly
+spawn/continue runtimeBudgetMs: 0 disables deadline; omitted continuation inherits prior budget
+wait timeoutMs only stops waiting; runtime-budget expiry interrupts agent; inspect partial output before resuming
 CLI: /agents, /aenter <id>, /akill <id>, /acont <id> <prompt>, /aclear
 
 ## Model tiers
@@ -239,29 +247,26 @@ agent_spawn supports mode=fork for contextual side-workers.
 - fork — injects a compact snapshot of recent parent conversation into the delegated task
 Use fork only when the worker needs recent conversational context. Prefer fresh when isolation is better.
 
-## Delegation Triggers (MANDATORY)
-Spawn a sub-agent with agent_spawn before doing the work yourself when ANY of the following apply:
-- The task likely needs reading or comparing 3+ files.
-- The relevant area of the codebase is still unknown and requires reconnaissance.
-- The work spans multiple directories, modules, services, or components.
-- The user asks for investigation, comparison, surveying, research, architecture, or planning.
-- The task has independent branches that can run in parallel.
-- The work would likely take more than 5 tool calls or noticeably expand your context.
+## Bounded orchestration
+Prefer delegation for focused investigation, independent parallel work, or context-heavy analysis. Handle trivial, self-contained work directly; file count alone is not a reason to delegate.
 
-## Orchestration (Best Practices)
-- **Delegation is Mandatory:** You are the Lead Architect. Prefer coordinating over doing manual labor yourself.
-- **agent_spawn is the primary delegation tool:** Use it for real delegated work, especially multi-file analysis, exploration, research, debugging, planning, and multi-component changes.
-- **Use direct tools yourself only for local, obvious, low-scope work:** e.g. checking one file, making a tiny edit, or verifying a single detail.
-- **Parallelism:** If a task has independent parts (e.g., testing 3 different files, researching 2 libraries), spawn multiple sub-agents simultaneously, then use agent_wait_all(join:true) when possible.
-- **Context Isolation:** If you need to debug a deep issue or read heavy documentation, send a sub-agent. Keep your own context clean for communicating with the USER.
-- **Do not rely on notifications** to continue work. They are for your information only.
+- Split large work by independently verifiable outcomes, not whole layers ("implement all backend") or arbitrary tiny steps. Keep a coherent change and its focused tests together; don't hand one worker the entire feature, integration, and verification pipeline.
+- Give each worker the deliverable, relevant findings/contracts, ownership boundaries or allowed files, non-goals, checks, and stop criteria. Ask for changed files, verification evidence, blockers, and remaining work. If scope grows, have the worker report a checkpoint rather than silently absorb more work.
+- Run independent work in parallel, usually 2–3 workers when useful, not a quota. Establish shared contracts first; keep dependencies sequential. Avoid overlapping edits; assign shared files one owner. Serialize heavy builds/tests that share workspace resources.
+- The parent owns scope, coordination, integration, and final verification. While workers run, do non-overlapping work. Collect each relevant result, inspect the actual diff, reconcile interfaces, and verify the combined behavior; worker success alone is not integration evidence.
+
+## Agent operations
+- **agent_spawn is the primary delegation tool:** Prefer it over disposable task for non-trivial work needing follow-up.
+- Default notifications are UI-only. Set notify="turn" when background completion should wake the parent; still collect and verify the result. A wait timeout is not a failed task: don't restart or duplicate a running worker.
 - **Use agent_join** when you need a result. It now returns diagnostic info if no text summary exists.
 - **Use agent_result** to inspect a finished agent later without blocking.
 - **Use join:true on agent_wait_any / agent_wait_all** when you want waiting + retrieval in one step.
 - **Do not leave finished agents unjoined** if their work matters to the answer.
 - For very long outputs, prefer agent_join or wait(join:true) with artifact:true to save the full result to a file and keep chat context small.
-- **Use wait_any / wait_all** for efficient parallel orchestration; join inline when possible.
+- With independent workers, prefer agent_wait_any(join:true) and start dependent work as inputs arrive. Use agent_wait_all for a real integration barrier, not by habit.
+- Return bounded fixes to the same worker via agent_continue when its context remains useful. Use a fresh worker for independent review or different expertise, not to repeat completed investigation.
 - After compaction or if you are unsure which agents are still active, call agent_list first to restore agent state.
+- /aclear only hides finished widgets. Hidden agents keep their IDs, history and results: reuse agent_result/agent_continue instead of spawning duplicates.
 - If agent_join reports no final output (e.g. tool-only or error), do not hallucinate results.
 
 ## agent_spawn vs task
@@ -469,7 +474,7 @@ function renderAgentBlock(
 		detail = agent.resultJoined ? "✓ joined" : `✓ awaiting join · use agent_join(${agent.id})`;
 		detailColor = "success";
 	}
-	else if (agent.timedOut) { detailPrefix = "      "; detail = "⏱ timed out (20 min limit)"; detailColor = "error"; }
+	else if (agent.timedOut) { detailPrefix = "      "; detail = `⏱ runtime budget exceeded (${agent.runtimeBudgetMs}ms)`; detailColor = "error"; }
 	else if (agent.killed) { detailPrefix = "      "; detail = "⊘ killed by user"; detailColor = "warning"; }
 	else if (agent.status === "error" && !agent.timedOut && !agent.killed) {
 		detailPrefix = "err:  ";
@@ -520,14 +525,38 @@ export default function baseAgents(pi: ExtensionAPI) {
 	const pendingNotifications = new Map<string, ReturnType<typeof setTimeout>>();
 	const completionWaiters = new Set<{
 		ids: Set<number>;
+		runSeqs: Record<number, number>;
 		mode: "any" | "all";
-		resolve: (result: { completedIds: number[] }) => void;
+		resolve: (result: { completedIds: number[]; staleIds: number[] }) => void;
 	}>();
 	let activeCtx: ExtensionContext | undefined;
 	let modelTiers: ModelTiers | null = null;
 
 	function runKey(id: number, runSeq: number): string {
 		return `${id}:${runSeq}`;
+	}
+
+	function validateTimeout(value: unknown, name: "timeoutMs" | "runtimeBudgetMs") {
+		const minimum = name === "runtimeBudgetMs" ? 0 : 1;
+		if (value !== undefined && (typeof value !== "number" || !Number.isInteger(value) || value < minimum || value > 2147483647)) {
+			return invalidArgument(`${name} must be an integer between ${minimum} and 2147483647.`, `Omit ${name} to use its default.`).toToolResult();
+		}
+	}
+
+	function waitTimeoutResult(ids: number[], runSeqs: Record<number, number>) {
+		const runningIds = ids.filter((id) => agents.get(id)?.status === "running");
+		return {
+			content: [{ type: "text" as const, text: `Wait timed out; no agents were stopped. Still running: ${runningIds.map((id) => `#${id}`).join(", ") || "none"}. Use agent_list or wait again; do not duplicate their work.` }],
+			details: { status: "timeout", timedOut: true, runningIds, runSeqs },
+		};
+	}
+
+	function staleWaitResult(ids: number[]) {
+		return {
+			content: [{ type: "text" as const, text: `Agent run changed while waiting: ${ids.join(", ")}. Use agent_result with the original runSeq or inspect agent_list.` }],
+			details: { status: "stale_run", agentIds: ids },
+			isError: true,
+		};
 	}
 
 	function clearAgentState(id: number): void {
@@ -546,10 +575,14 @@ export default function baseAgents(pi: ExtensionAPI) {
 		}
 	}
 
-	function beginAgentRun(state: SubAgentState, prompt: string, notifyMode?: "off" | "ui" | "turn"): void {
+	function beginAgentRun(state: SubAgentState, prompt: string, notifyMode?: "off" | "ui" | "turn", runtimeBudgetMs?: number): void {
+		const recovering = state.timedOut || state.killed || state.status === "error";
 		state.status = "running";
 		state.resultJoined = false;
-		state.task = prompt;
+		state.widgetHidden = false;
+		state.task = recovering
+			? `Recovery after interrupted run: inspect current files and tool effects first. Do not blindly rerun mutations, tests, or commands. Treat partial output as unverified.\n\n${prompt}`
+			: prompt;
 		state.lastAssistantText = "";
 		state.lastErrorMessage = "";
 		state.currentStreamText = "";
@@ -559,10 +592,13 @@ export default function baseAgents(pi: ExtensionAPI) {
 		state.startTime = Date.now();
 		state.killed = false;
 		state.timedOut = false;
+		state.interruptionReason = undefined;
 		state.stderrLines = [];
 		state.lastTool = undefined;
 		state.runSeq++;
+		state.completionFile = undefined;
 		state.notifyMode = notifyMode ?? state.notifyMode ?? "ui";
+		if (runtimeBudgetMs !== undefined) state.runtimeBudgetMs = runtimeBudgetMs;
 		state.lastActivityAt = Date.now();
 
 		const previousKey = runKey(state.id, state.runSeq - 1);
@@ -572,6 +608,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 			pendingNotifications.delete(previousKey);
 		}
 		joinWaiters.delete(previousKey);
+		settleCompletionWaiters();
 	}
 
 	function describeCompletedAgent(id: number): string | undefined {
@@ -582,23 +619,20 @@ export default function baseAgents(pi: ExtensionAPI) {
 
 	function settleCompletionWaiters(): void {
 		for (const waiter of Array.from(completionWaiters)) {
-			if (waiter.mode === "any") {
-				const finishedId = Array.from(waiter.ids).find((id) => agents.get(id)?.status !== "running");
-				if (finishedId !== undefined) {
-					completionWaiters.delete(waiter);
-					waiter.resolve({ completedIds: [finishedId] });
-				}
-			} else {
-				const completedIds = Array.from(waiter.ids).filter((id) => agents.get(id)?.status !== "running");
-				if (completedIds.length === waiter.ids.size) {
-					completionWaiters.delete(waiter);
-					waiter.resolve({ completedIds });
-				}
+			const finishedIds = Array.from(waiter.ids).filter((id) => {
+				const state = agents.get(id);
+				return !state || state.runSeq !== waiter.runSeqs[id] || state.status !== "running";
+			});
+			if ((waiter.mode === "any" && finishedIds.length > 0) || (waiter.mode === "all" && finishedIds.length === waiter.ids.size)) {
+				const selectedIds = waiter.mode === "any" ? [finishedIds[0]] : finishedIds;
+				const staleIds = selectedIds.filter((id) => agents.get(id)?.runSeq !== waiter.runSeqs[id]);
+				completionWaiters.delete(waiter);
+				waiter.resolve({ completedIds: selectedIds.filter((id) => !staleIds.includes(id)), staleIds });
 			}
 		}
 	}
 
-	/** Computes next agent ID: 1 when empty, else max(existing) + 1. Ensures IDs reset after /aclear or /akill. */
+	/** Computes next agent ID: 1 when empty, else max(existing) + 1. Hidden agents retain their IDs. */
 	function nextAgentId(): number {
 		if (agents.size === 0) return 1;
 		return Math.max(...agents.keys()) + 1;
@@ -627,34 +661,50 @@ export default function baseAgents(pi: ExtensionAPI) {
 		mode: "any" | "all",
 		signal?: AbortSignal,
 		timeoutMs = AGENT_JOIN_TIMEOUT_MS,
-	): Promise<{ status: "done" | "timeout" | "cancelled"; completedIds: number[] }> {
-		if (targetIds.length === 0) return { status: "done", completedIds: [] };
-
-		const immediateCompleted = targetIds.filter((id) => agents.get(id)?.status !== "running");
-		if ((mode === "any" && immediateCompleted.length > 0) || (mode === "all" && immediateCompleted.length === targetIds.length)) {
-			return { status: "done", completedIds: mode === "any" ? [immediateCompleted[0]] : immediateCompleted };
+	): Promise<{ status: "done" | "timeout" | "cancelled"; completedIds: number[]; staleIds: number[]; runSeqs: Record<number, number> }> {
+		const runSeqs = Object.fromEntries(targetIds.map((id) => [id, agents.get(id)?.runSeq ?? 0]));
+		const isFinished = (id: number) => {
+			const state = agents.get(id);
+			return !state || state.runSeq !== runSeqs[id] || state.status !== "running";
+		};
+		const finishedIds = targetIds.filter(isFinished);
+		if (targetIds.length === 0 || (mode === "any" && finishedIds.length > 0) || (mode === "all" && finishedIds.length === targetIds.length)) {
+			const selectedIds = mode === "any" ? finishedIds.slice(0, 1) : finishedIds;
+			const staleIds = selectedIds.filter((id) => agents.get(id)?.runSeq !== runSeqs[id]);
+			return { status: "done", completedIds: selectedIds.filter((id) => !staleIds.includes(id)), staleIds, runSeqs };
 		}
 
 		return await new Promise((resolve) => {
 			let timeoutId: ReturnType<typeof setTimeout>;
-			const waiter = {
-				ids: new Set(targetIds),
-				mode,
-				resolve: ({ completedIds }: { completedIds: number[] }) => {
-					clearTimeout(timeoutId);
-					resolve({ status: "done", completedIds });
-				},
-			};
-			completionWaiters.add(waiter);
-			timeoutId = setTimeout(() => {
-				completionWaiters.delete(waiter);
-				resolve({ status: "timeout", completedIds: [] });
-			}, timeoutMs);
-			signal?.addEventListener("abort", () => {
+			let settled = false;
+			const finish = (result: { status: "done" | "timeout" | "cancelled"; completedIds: number[]; staleIds: number[] }) => {
+				if (settled) return;
+				settled = true;
 				clearTimeout(timeoutId);
+				signal?.removeEventListener("abort", onAbort);
 				completionWaiters.delete(waiter);
-				resolve({ status: "cancelled", completedIds: [] });
-			}, { once: true });
+				resolve({ ...result, runSeqs });
+			};
+			let waiter: {
+				ids: Set<number>;
+				runSeqs: Record<number, number>;
+				mode: "any" | "all";
+				resolve: (result: { completedIds: number[]; staleIds: number[] }) => void;
+			};
+			const onAbort = () => finish({ status: "cancelled", completedIds: [], staleIds: [] });
+			waiter = {
+				ids: new Set(targetIds),
+				runSeqs,
+				mode,
+				resolve: ({ completedIds, staleIds }) => finish({ status: "done", completedIds, staleIds }),
+			};
+			if (signal?.aborted) {
+				resolve({ status: "cancelled", completedIds: [], staleIds: [], runSeqs });
+				return;
+			}
+			completionWaiters.add(waiter);
+			timeoutId = setTimeout(() => finish({ status: "timeout", completedIds: [], staleIds: [] }), timeoutMs);
+			signal?.addEventListener("abort", onAbort, { once: true });
 		});
 	}
 
@@ -667,7 +717,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 		const completion = readCompletionEnvelope(state.sessionFile, state.runSeq);
 		let resultText = completion?.finalText || state.lastAssistantText;
 
-		if (!resultText && state.sessionFile) {
+		if (!resultText && state.sessionFile && state.runSeq === 1) {
 			const terminal = extractTerminalResultFromFile(state.sessionFile);
 			if (terminal.kind === "text") resultText = terminal.text || "";
 			else if (terminal.kind === "error") resultText = `Agent finished without final answer.\nError: ${terminal.error}`;
@@ -731,15 +781,27 @@ export default function baseAgents(pi: ExtensionAPI) {
 		ctx: ExtensionContext,
 	): { content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown>; isError?: boolean } {
 		const completion = readCompletionEnvelope(state.sessionFile, state.runSeq);
-		if (state.timedOut) {
+		if (state.timedOut || state.killed || completion?.outcome === "interrupted") {
+			const partialText = completion?.partialText || state.currentStreamText || state.lastAssistantText;
+			const shouldPersist = params.artifact || partialText.length > MAX_FULL_OUTPUT;
+			const artifactPath = shouldPersist ? persistAgentArtifact(ctx.cwd || process.cwd(), state.id, partialText) : undefined;
+			const formatted = formatAgentOutputDetailed(partialText, params.format);
+			const canContinue = state.status !== "running" && !state.proc && existsSync(state.sessionFile);
+			const elapsedMs = completion?.elapsedMs ?? state.elapsed;
+			const reason = state.timedOut ? `runtime budget exceeded (${state.runtimeBudgetMs}ms)` : "process stopped";
+			state.resultJoined = true;
+			joinedRuns.add(runKey(state.id, state.runSeq));
 			return {
-				content: [{ type: "text", text: `Agent #${state.id} timed out (exceeded 20 minute limit).` }],
-				isError: true,
-			};
-		}
-		if (state.killed) {
-			return {
-				content: [{ type: "text", text: `Agent #${state.id} was killed before completing.` }],
+				content: [{ type: "text", text: `Agent #${state.id} interrupted: ${reason}. Work is incomplete and unverified.\nElapsed: ${Math.round(elapsedMs / 1000)}s; tools: ${state.toolCount}; last tool: ${state.lastTool?.name ?? "none"}.\nSession: ${state.sessionFile}${state.lastErrorMessage ? `\nLast API/Model error: ${state.lastErrorMessage}` : ""}${partialText ? `\n\nPartial output (not a final result):\n${formatted.text}` : "\nNo partial text was captured; inspect files and the session."}${artifactPath ? `\nFull partial output: ${artifactPath}` : ""}\n\n${canContinue ? `Inspect existing changes and tool effects, then explicitly agent_continue(${state.id}) if appropriate.` : "Wait for process exit before continuing; the session file must still exist."}` }],
+				details: {
+					runSeq: state.runSeq, status: state.status, completionOutcome: "interrupted",
+					completionExitCode: completion?.exitCode, elapsedMs, runtimeBudgetMs: state.runtimeBudgetMs,
+					interruptionReason: completion?.interruptionReason ?? state.interruptionReason,
+					lastTool: completion?.lastTool ?? state.lastTool, lastActivityAt: completion?.lastActivityAt ?? state.lastActivityAt,
+					lastError: completion?.lastError ?? state.lastErrorMessage, canContinue,
+					truncated: formatted.truncated, sessionFile: state.sessionFile, completionFile: state.completionFile,
+					artifact: Boolean(artifactPath), artifactPath, fullOutputPath: artifactPath,
+				},
 				isError: true,
 			};
 		}
@@ -840,8 +902,10 @@ export default function baseAgents(pi: ExtensionAPI) {
 
 	function updateAllWidgets() {
 		if (!activeCtx) return;
-		const focusedId = getFocusedAgentId(Array.from(agents.values()));
-		for (const [id, state] of agents) {
+		const visibleAgents = Array.from(agents.values()).filter((state) => !state.widgetHidden || state.status === "running");
+		const focusedId = getFocusedAgentId(visibleAgents);
+		for (const state of visibleAgents) {
+			const id = state.id;
 			activeCtx.ui.setWidget(`agent-${id}`, (_tui, theme) => {
 				const isFocused = state.id === focusedId;
 
@@ -859,20 +923,43 @@ export default function baseAgents(pi: ExtensionAPI) {
 	// ── Process Management ─────────────────────────────────────────────
 
 	/** Kills all running subagent processes. Used on exit and session shutdown. */
+	const runtimeTimers = new Map<number, ReturnType<typeof setTimeout>>();
 	function killAllAgents(): void {
 		for (const state of agents.values()) {
-			if (state.proc && state.status === "running") {
-				killProcess(state.proc);
-				scheduleForceKill(state.proc);
+			const proc = state.proc;
+			if (state.status !== "running") continue;
+			state.killed = true;
+			state.interruptionReason ??= "parent_shutdown";
+			state.elapsed = Math.max(0, Date.now() - state.startTime);
+			state.status = "error";
+			state.proc = undefined;
+			const timer = runtimeTimers.get(state.id);
+			if (timer) clearTimeout(timer);
+			runtimeTimers.delete(state.id);
+			state.completionFile = persistCompletionEnvelope(state, null);
+			if (proc) {
+				killProcess(proc);
+				scheduleForceKill(proc);
 			}
 		}
+		settleCompletionWaiters();
 	}
 
 	function killAgent(state: SubAgentState): boolean {
-		if (!state.proc || state.status !== "running") return false;
+		const proc = state.proc;
+		if (!proc || state.status !== "running") return false;
 		state.killed = true;
-		killProcess(state.proc);
-		scheduleForceKill(state.proc);
+		state.interruptionReason ??= "user_kill";
+		state.elapsed = Math.max(0, Date.now() - state.startTime);
+		state.status = "error";
+		state.proc = undefined;
+		const timer = runtimeTimers.get(state.id);
+		if (timer) clearTimeout(timer);
+		runtimeTimers.delete(state.id);
+		state.completionFile = persistCompletionEnvelope(state, null);
+		killProcess(proc);
+		scheduleForceKill(proc);
+		settleCompletionWaiters();
 		return true;
 	}
 
@@ -881,90 +968,131 @@ export default function baseAgents(pi: ExtensionAPI) {
 		state.tools = toolList.join(",");
 		const currentRunSeq = state.runSeq;
 		const key = runKey(state.id, currentRunSeq);
+		const isCurrentRun = () => agents.get(state.id) === state && state.runSeq === currentRunSeq && state.status === "running";
+		const notifyCompletion = () => {
+			if (agents.get(state.id) !== state || state.runSeq !== currentRunSeq || (state.killed && !state.timedOut)) return;
+			const mode = state.notifyMode ?? "ui";
+			if (mode === "off" || !activeCtx) return;
+			activeCtx.ui.notify(`Agent #${state.id} [${state.name}] ${state.status}!`, state.status === "done" ? "success" : "error");
+			if (mode !== "turn" || joinWaiters.has(key) || joinedRuns.has(key)) return;
+			const tid = setTimeout(() => {
+				pendingNotifications.delete(key);
+				if (agents.get(state.id) !== state || state.runSeq !== currentRunSeq || joinWaiters.has(key) || joinedRuns.has(key) || !activeCtx) return;
+				pi.sendMessage({
+					customType: "agent-notification",
+					content: `📢 Agent #${state.id} [${state.name}] ${state.status === "done" ? "completed its task" : state.timedOut ? "was interrupted: runtime budget exceeded" : "finished with an error"}.\n\nUse agent_join with id: ${state.id} to retrieve the result.`,
+					details: { agentId: state.id, runSeq: currentRunSeq, status: state.status, timedOut: state.timedOut },
+					display: true,
+				}, { deliverAs: "followUp", triggerTurn: true });
+			}, AGENT_NOTIFICATION_DELAY_MS);
+			pendingNotifications.set(key, tid);
+		};
+		let settled = false;
+		const settleFailure = (message: string) => {
+			if (settled || !isCurrentRun()) return;
+			settled = true;
+			state.status = "error";
+			state.elapsed = Math.max(0, Date.now() - state.startTime);
+			state.lastActivityAt = Date.now();
+			state.lastErrorMessage = message;
+			state.stderrLines.push(message);
+			state.completionFile = persistCompletionEnvelope(state, null);
+			state.proc = undefined;
+			updateAllWidgets();
+			settleCompletionWaiters();
+			onComplete?.();
+			notifyCompletion();
+		};
 
 		// Verify session file exists before spawning (retry for Windows FS delay)
 		let found = false;
-		for (let attempt = 0; attempt <= SESSION_FILE_RETRY_ATTEMPTS; attempt++) {
-			if (existsSync(path.resolve(state.sessionFile))) {
-				found = true;
-				break;
+		try {
+			for (let attempt = 0; attempt <= SESSION_FILE_RETRY_ATTEMPTS; attempt++) {
+				if (!isCurrentRun()) return;
+				if (existsSync(path.resolve(state.sessionFile))) {
+					found = true;
+					break;
+				}
+				if (attempt < SESSION_FILE_RETRY_ATTEMPTS) {
+					await new Promise((r) => setTimeout(r, SESSION_FILE_RETRY_DELAY_MS));
+				}
 			}
-			if (attempt < SESSION_FILE_RETRY_ATTEMPTS) {
-				await new Promise((r) => setTimeout(r, SESSION_FILE_RETRY_DELAY_MS));
-			}
+		} catch (err) {
+			settleFailure(`Could not verify session file ${state.sessionFile}: ${err instanceof Error ? err.message : String(err)}`);
+			return;
 		}
+		if (!isCurrentRun()) return;
 		if (!found) {
-			state.status = "error";
-			state.stderrLines.push(`Session file not found: ${state.sessionFile}`);
-			updateAllWidgets();
+			settleFailure(`Session file not found: ${state.sessionFile}`);
 			return;
 		}
 
-		const cwd = activeCtx?.cwd || process.cwd();
-		const extensions = resolveExtensions(toolList, import.meta.url);
-
-		const phaseGuidance = buildPhaseGuidance(state.phase);
-		const proc = spawnPiProcess({
-			task: `${phaseGuidance}${phaseGuidance ? "\n\n" : ""}${state.task}`,
-			sessionFile: state.sessionFile,
-			toolList,
-			extensions,
-			model,
-			thinkingLevel: resolveThinkingLevel(state.tier),
-			cwd,
-			isContinuation: state.turnCount > 1,
-			extraEnv: buildAllowedToolsEnv(toolList)
-		});
+		let proc: ChildProcess;
+		try {
+			const cwd = activeCtx?.cwd || process.cwd();
+			const extensions = resolveExtensions(toolList, import.meta.url);
+			const phaseGuidance = buildPhaseGuidance(state.phase);
+			proc = spawnPiProcess({
+				task: `${phaseGuidance}${phaseGuidance ? "\n\n" : ""}${state.task}`,
+				sessionFile: state.sessionFile,
+				toolList,
+				extensions,
+				model,
+				thinkingLevel: resolveThinkingLevel(state.tier),
+				cwd,
+				isContinuation: state.runSeq > 1,
+				extraEnv: buildAllowedToolsEnv(toolList)
+			});
+		} catch (err) {
+			settleFailure(`Could not start agent process: ${err instanceof Error ? err.message : String(err)}`);
+			return;
+		}
 
 		state.proc = proc;
 		let buf = "";
 		ensureTimer();
 
-		// Safety timeout: kill if still running after 20 minutes.
-		// Prevents the main agent from being permanently blocked in agent_join.
-		const timeoutId = setTimeout(() => {
-			if (state.status === "running") {
+		const budgetMs = state.runtimeBudgetMs ?? 0;
+		const timeoutId = budgetMs > 0 ? setTimeout(() => {
+			if (isCurrentRun() && state.proc === proc) {
+				runtimeTimers.delete(state.id);
 				state.timedOut = true;
 				state.killed = true;
-				if (state.proc) {
-					killProcess(state.proc);
-					scheduleForceKill(state.proc);
-				}
+				state.interruptionReason = "runtime_budget";
+				killProcess(proc);
+				scheduleForceKill(proc);
 			}
-		}, AGENT_JOIN_TIMEOUT_MS);
+		}, budgetMs) : undefined;
+		if (timeoutId) runtimeTimers.set(state.id, timeoutId);
+		const isCurrentProcess = () => isCurrentRun() && state.proc === proc;
+		const clearRunTimeout = () => {
+			if (timeoutId !== undefined) clearTimeout(timeoutId);
+			if (runtimeTimers.get(state.id) === timeoutId) runtimeTimers.delete(state.id);
+		};
 
 		// ── stdout: parse JSON events ─────────────────────────────────
-
-		proc.stdout!.setEncoding("utf-8");
-		proc.stdout!.on("data", (chunk: string) => {
-			if (state.runSeq !== currentRunSeq) return;
+		proc.stdout?.setEncoding("utf-8");
+		proc.stdout?.on("data", (chunk: string) => {
+			if (!isCurrentProcess()) return;
 			buf += chunk;
 			const lines = buf.split("\n");
 			buf = lines.pop() || "";
 			for (const line of lines) {
 				if (!line.trim()) continue;
 				state.lastActivityAt = Date.now();
-				try {
-					parseAgentEvent(JSON.parse(line), state);
-				} catch { /* skip malformed JSON lines */ }
+				try { parseAgentEvent(JSON.parse(line), state); } catch { /* skip malformed JSON lines */ }
 			}
 		});
 
 		// ── stderr: capture for debugging ────────────────────────────
-
-		proc.stderr!.setEncoding("utf-8");
-		proc.stderr!.on("data", (chunk: string) => {
-			if (state.runSeq !== currentRunSeq) return;
-			// Store last few lines of stderr (useful for diagnosing errors)
-			// Filter out known UV_HANDLE_CLOSING noise on Windows (doesn't affect functionality)
-			const isUvClosingNoise = (line: string) => 
-				line.includes("UV_HANDLE_CLOSING") || 
-				line.includes("src\\win\\async.c") || 
+		proc.stderr?.setEncoding("utf-8");
+		proc.stderr?.on("data", (chunk: string) => {
+			if (!isCurrentProcess()) return;
+			const isUvClosingNoise = (line: string) =>
+				line.includes("UV_HANDLE_CLOSING") ||
+				line.includes("src\\win\\async.c") ||
 				line.includes("src/win/async.c");
-			
-			const lines = chunk.split("\n")
-				.filter(l => l.trim() && !isUvClosingNoise(l));
-			for (const line of lines) {
+			for (const line of chunk.split("\n").filter(l => l.trim() && !isUvClosingNoise(l))) {
 				state.lastActivityAt = Date.now();
 				state.stderrLines.push(line);
 				if (state.stderrLines.length > MAX_STDERR_LINES) state.stderrLines.shift();
@@ -972,79 +1100,35 @@ export default function baseAgents(pi: ExtensionAPI) {
 		});
 
 		// ── close: finalize state ─────────────────────────────────────
-
 		proc.on("close", (code) => {
-			clearTimeout(timeoutId);
-			if (state.runSeq !== currentRunSeq) return;
-			if (!agents.has(state.id)) return; // Agent removed by /akill
-
-			// Flush remaining buffer (may contain multiple complete lines)
+			if (!isCurrentProcess() || settled) return;
+			settled = true;
+			clearRunTimeout();
 			for (const line of buf.split("\n").filter((l) => l.trim())) {
 				state.lastActivityAt = Date.now();
-				try {
-					parseAgentEvent(JSON.parse(line), state);
-				} catch {}
+				try { parseAgentEvent(JSON.parse(line), state); } catch {}
 			}
-
 			state.status = (!state.killed && code === 0) ? "done" : "error";
-			
-			// Windows fix: Close stdout/stderr to prevent UV_HANDLE_CLOSING assertion
-			// This occurs when Node.js tries to close handles already terminated by taskkill
 			if (process.platform === "win32") {
 				try { proc.stdout?.destroy(); } catch {}
 				try { proc.stderr?.destroy(); } catch {}
 			}
-			
-			state.lastActivityAt = Date.now();
+			const finishedAt = Date.now();
+			state.elapsed = Math.max(0, finishedAt - state.startTime);
 			state.proc = undefined;
 			state.completionFile = persistCompletionEnvelope(state, code ?? null);
 			updateAllWidgets();
 			settleCompletionWaiters();
 			onComplete?.();
-
-			// Only send follow-up if NOT killed/timed-out by us
-			if (!state.killed && activeCtx) {
-				const notifType = state.status === "done" ? "success" : "error";
-				activeCtx.ui.notify(
-					`Agent #${state.id} [${state.name}] ${state.status}!`,
-					notifType
-				);
-
-				// Notifications logic:
-				// - "off": no chat message
-				// - "ui" (default): UI only (handled above)
-				// - "turn": trigger turn in chat (legacy/advanced mode)
-				const mode = state.notifyMode ?? "ui";
-				if (mode === "turn" && !joinWaiters.has(key) && !joinedRuns.has(key)) {
-					const tid = setTimeout(() => {
-						pendingNotifications.delete(key);
-						if (!joinedRuns.has(key) && agents.get(state.id)?.runSeq === currentRunSeq && activeCtx) {
-							pi.sendMessage({
-								customType: "agent-notification",
-								content: `📢 Agent #${state.id} [${state.name}] has finished its task.\n\nUse agent_join with id: ${state.id} to retrieve the result.`,
-								display: true,
-							}, { deliverAs: "followUp", triggerTurn: true });
-						}
-					}, AGENT_NOTIFICATION_DELAY_MS);
-					pendingNotifications.set(key, tid);
-				}
-			}
+			notifyCompletion();
 		});
 
 		// ── error: spawn failed ───────────────────────────────────────
-
 		proc.on("error", (err: Error) => {
-			clearTimeout(timeoutId);
-			if (!agents.has(state.id)) return; // Agent removed by /akill
-			state.status = "error";
-			state.stderrLines.push(`Spawn error: ${err.message}`);
-			if (state.proc) {
-				try { state.proc.kill("SIGTERM"); } catch {}
-			}
-			state.proc = undefined;
-			updateAllWidgets();
-			settleCompletionWaiters();
-			onComplete?.();
+			if (!isCurrentProcess() || settled) return;
+			clearRunTimeout();
+			try { proc.kill("SIGTERM"); } catch {}
+			settleFailure(`Spawn error: ${err.message}`);
 		});
 	}
 
@@ -1083,13 +1167,15 @@ export default function baseAgents(pi: ExtensionAPI) {
 				return { content: [{ type: "text", text: `Error: Unknown agent id(s): ${missingIds.join(", ")}. Use agent_list to inspect active agents.` }], isError: true };
 			}
 
-			const waitResult = await waitForAgents(targetIds, "any", signal, params.timeoutMs || AGENT_JOIN_TIMEOUT_MS);
+			const invalid = validateTimeout(params.timeoutMs, "timeoutMs");
+			if (invalid) return invalid;
+			const waitResult = await waitForAgents(targetIds, "any", signal, params.timeoutMs ?? AGENT_JOIN_TIMEOUT_MS);
 			if (waitResult.status === "cancelled") {
-				return { content: [{ type: "text", text: "Wait cancelled by user." }], isError: true };
+				return { content: [{ type: "text", text: "Wait cancelled by user; agents were not stopped." }], isError: true };
 			}
-			if (waitResult.status === "timeout") {
-				return { content: [{ type: "text", text: "Wait timed out." }], isError: true };
-			}
+			if (waitResult.status === "timeout") return waitTimeoutResult(targetIds, waitResult.runSeqs);
+			const staleIds = targetIds.filter((id) => agents.get(id)?.runSeq !== waitResult.runSeqs[id]);
+			if (staleIds.length) return staleWaitResult(staleIds);
 			if (params.join) {
 				for (const id of waitResult.completedIds) joinWaiters.add(runKey(id, agents.get(id)?.runSeq ?? 0));
 				try {
@@ -1127,13 +1213,15 @@ export default function baseAgents(pi: ExtensionAPI) {
 				return { content: [{ type: "text", text: `Error: Unknown agent id(s): ${missingIds.join(", ")}. Use agent_list to inspect active agents.` }], isError: true };
 			}
 
-			const waitResult = await waitForAgents(targetIds, "all", signal, params.timeoutMs || AGENT_JOIN_TIMEOUT_MS);
+			const invalid = validateTimeout(params.timeoutMs, "timeoutMs");
+			if (invalid) return invalid;
+			const waitResult = await waitForAgents(targetIds, "all", signal, params.timeoutMs ?? AGENT_JOIN_TIMEOUT_MS);
 			if (waitResult.status === "cancelled") {
-				return { content: [{ type: "text", text: "Wait cancelled by user." }], isError: true };
+				return { content: [{ type: "text", text: "Wait cancelled by user; agents were not stopped." }], isError: true };
 			}
-			if (waitResult.status === "timeout") {
-				return { content: [{ type: "text", text: "Wait timed out." }], isError: true };
-			}
+			if (waitResult.status === "timeout") return waitTimeoutResult(targetIds, waitResult.runSeqs);
+			const staleIds = targetIds.filter((id) => agents.get(id)?.runSeq !== waitResult.runSeqs[id]);
+			if (staleIds.length) return staleWaitResult(staleIds);
 			if (params.join) {
 				for (const id of waitResult.completedIds) joinWaiters.add(runKey(id, agents.get(id)?.runSeq ?? 0));
 				try {
@@ -1159,10 +1247,12 @@ export default function baseAgents(pi: ExtensionAPI) {
 	if (isAllowed("agent_spawn")) pi.registerTool({
 		name: "agent_spawn",
 		label: "Spawn Agent",
-		description: "PRIMARY delegation tool. Spawn a background sub-agent with a persistent session. Tier selects both model and matching thinking level (low/medium/high); omitted tier inherits the parent model with thinking off. Returns ID immediately for agent_join. (Sub-agents ALWAYS have read, glob, grep, find, ls). Prefer this over task for non-trivial work.",
+		description: "PRIMARY delegation tool. Spawn a background sub-agent for one bounded deliverable; returns ID immediately. Persistent session supports follow-up. No execution deadline unless runtimeBudgetMs > 0. Tier selects model/thinking; omitted inherits parent model with thinking off. Read, glob, grep, find, ls always included. Prefer over disposable task for non-trivial work.",
 		parameters: AgentSpawnParams,
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			activeCtx = ctx;
+			const invalid = validateTimeout(params.runtimeBudgetMs, "runtimeBudgetMs");
+			if (invalid) return invalid;
 			const delegation = validateDelegationPrompt({ text: params.task, tags: params.tags, mode: "spawn" });
 			if (!delegation.ok) {
 				return {
@@ -1213,6 +1303,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 				sessionFile: makeSessionFile(id, cwd),
 				killed: false,
 				timedOut: false,
+				runtimeBudgetMs: params.runtimeBudgetMs ?? 0,
 				stderrLines: [],
 				tools: toolList.join(","),
 				tags: params.tags,
@@ -1246,7 +1337,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 	if (isAllowed("agent_join")) pi.registerTool({
 		name: "agent_join",
 		label: "Join Agent",
-		description: "Wait for sub-agent to finish and return its output. Use this after agent_spawn for any delegated work that matters to your response. Optionally save the full output to an artifact file. Times out after 20 min. Required: id (number). Repeat calls are allowed.",
+		description: "Wait for sub-agent output, up to timeoutMs (default 20 min). Timeout returns still-running status without stopping the agent; wait again later. Retrieve every relevant delegated result. Optional artifact saves full output.",
 		parameters: AgentJoinParams,
 		async execute(_id, params, signal, _onUpdate, ctx) {
 			const state = agents.get(params.id);
@@ -1257,26 +1348,21 @@ export default function baseAgents(pi: ExtensionAPI) {
 				};
 			}
 
-			const key = runKey(state.id, state.runSeq);
+			const invalid = validateTimeout(params.timeoutMs, "timeoutMs");
+			if (invalid) return invalid;
+			const expectedRunSeq = state.runSeq;
+			const key = runKey(state.id, expectedRunSeq);
 			joinWaiters.add(key);
 			try {
-				const waitResult = await waitForAgents([params.id], "all", signal, AGENT_JOIN_TIMEOUT_MS);
+				const waitResult = await waitForAgents([params.id], "all", signal, params.timeoutMs ?? AGENT_JOIN_TIMEOUT_MS);
 				if (waitResult.status === "cancelled") {
 					return {
 						content: [{ type: "text", text: `agent_join cancelled by user (Escape pressed). Agent #${params.id} is still running.` }],
 						isError: true,
 					};
 				}
-				if (waitResult.status === "timeout") {
-					if (state.proc) {
-						killProcess(state.proc);
-						scheduleForceKill(state.proc);
-					}
-					return {
-						content: [{ type: "text", text: `agent_join timed out waiting for agent #${params.id} (20 min limit). Agent has been terminated.` }],
-						isError: true,
-					};
-				}
+				if (state.runSeq !== expectedRunSeq || agents.get(state.id) !== state) return staleWaitResult([state.id]);
+				if (waitResult.status === "timeout") return waitTimeoutResult([state.id], waitResult.runSeqs);
 				return finalizeJoinResult(state, { format: params.format, artifact: params.artifact }, ctx);
 			} finally {
 				joinWaiters.delete(key);
@@ -1302,19 +1388,25 @@ export default function baseAgents(pi: ExtensionAPI) {
 					isError: true,
 				};
 			}
-			if (state.status === "running") {
+			const targetRunSeq = params.runSeq ?? state.runSeq;
+			if (state.status === "running" && targetRunSeq === state.runSeq) {
 				return {
-					content: [{ type: "text", text: `Agent #${params.id} is still running. Wait for it to finish before requesting agent_result.` }],
+					content: [{ type: "text", text: `Agent #${params.id} run ${targetRunSeq} is still running. Wait for it to finish before requesting its result.` }],
 					isError: true,
 				};
 			}
-			const targetRunSeq = params.runSeq ?? state.runSeq;
 			const completion = readCompletionEnvelope(state.sessionFile, targetRunSeq);
 			if (!completion) {
+				if (targetRunSeq !== state.runSeq) return { content: [{ type: "text", text: `No completion recorded for agent #${state.id} run ${targetRunSeq}.` }], details: { runSeq: targetRunSeq }, isError: true };
+				return finalizeJoinResult(state, { format: params.format, artifact: params.artifact }, ctx);
+			}
+			if (completion.outcome === "interrupted" && targetRunSeq === state.runSeq) {
 				return finalizeJoinResult(state, { format: params.format, artifact: params.artifact }, ctx);
 			}
 
-			let resultText = completion.finalText;
+			let resultText = completion.outcome === "interrupted"
+				? `Interrupted run; incomplete and unverified.\n\nPartial output:\n${completion.partialText || "No partial text was captured."}`
+				: completion.finalText;
 			if (!resultText) {
 				if (completion.outcome === "tool-only") resultText = `Agent finished task via tools but produced no final text summary. Check the session (/aenter ${state.id}) for details.`;
 				else if (completion.outcome === "interrupted") resultText = `Agent was interrupted before producing a final text summary.`;
@@ -1343,8 +1435,11 @@ export default function baseAgents(pi: ExtensionAPI) {
 					turnCount: completion.turnCount,
 					toolCount: completion.toolCount,
 					elapsedMs: completion.elapsedMs,
+					lastTool: completion.lastTool, lastError: completion.lastError,
+					interruptionReason: completion.interruptionReason, runtimeBudgetMs: completion.runtimeBudgetMs,
+					lastActivityAt: completion.lastActivityAt,
 					sessionFile: completion.sessionFile,
-					completionFile: state.completionFile,
+					completionFile: getCompletionFilePath(state.sessionFile, targetRunSeq),
 					artifact: Boolean(artifactPath),
 					artifactPath,
 					fullOutputPath: artifactPath,
@@ -1358,10 +1453,12 @@ export default function baseAgents(pi: ExtensionAPI) {
 	if (isAllowed("agent_continue")) pi.registerTool({
 		name: "agent_continue",
 		label: "Continue Agent",
-		description: "Continue sub-agent with new instructions. Reuses session history. Returns immediately. Required: id (number), prompt. Optional: tags, tier, model, notify, format. (Sub-agents ALWAYS have read, glob, grep, find, ls).",
+		description: "Continue a stopped sub-agent with new instructions and saved history; returns immediately. After interruption inspect changes/tool effects before resuming. runtimeBudgetMs inherits the previous budget; 0 clears it. Required: id, prompt. Optional tags, tier, model, notify, format, phase. Read, glob, grep, find, ls always included.",
 		parameters: AgentContinueParams,
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			activeCtx = ctx;
+			const invalid = validateTimeout(params.runtimeBudgetMs, "runtimeBudgetMs");
+			if (invalid) return invalid;
 			const delegation = validateDelegationPrompt({ text: params.prompt, tags: params.tags, mode: "continue" });
 			if (!delegation.ok) {
 				return {
@@ -1383,11 +1480,8 @@ export default function baseAgents(pi: ExtensionAPI) {
 					isError: true,
 				};
 			}
-			if (state.timedOut) {
-				return {
-					content: [{ type: "text", text: `Agent #${params.id} timed out and cannot be continued.` }],
-					isError: true,
-				};
+			if (state.proc) {
+				return { content: [{ type: "text", text: `Agent #${state.id} process has not exited; wait before continuing.` }], isError: true };
 			}
 			if (!existsSync(state.sessionFile)) {
 				return {
@@ -1396,7 +1490,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 				};
 			}
 
-			beginAgentRun(state, params.prompt, params.notify);
+			beginAgentRun(state, params.prompt, params.notify, params.runtimeBudgetMs);
 			const requestedPhase = normalizePhase(params.phase);
 			const phaseValidation = validatePhaseTransition(state.phase, requestedPhase);
 			state.phase = requestedPhase ?? state.phase;
@@ -1441,7 +1535,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 			}
 			const lines = Array.from(agents.values()).map(s => {
 				const elapsed = `${Math.round(s.elapsed / 1000)}s`;
-				const suffix = s.killed ? " [killed]" : s.timedOut ? " [timed out]" : "";
+				const suffix = s.timedOut ? " [runtime budget exceeded]" : s.killed ? " [killed]" : "";
 				const joinSuffix = s.status === "done" ? (s.resultJoined ? " [joined]" : " [awaiting join]") : "";
 				const meta = formatAgentMetaInline(s);
 				return `#${s.id} [${s.name}] ${s.status.toUpperCase()}${suffix}${joinSuffix} — ${elapsed} · ${s.turnCount} turns · ${s.toolCount} tools${meta ? ` · ${meta}` : ""}`;
@@ -1569,8 +1663,8 @@ export default function baseAgents(pi: ExtensionAPI) {
 								tui.requestRender();
 								return;
 							}
-							if (agent.timedOut || !existsSync(agent.sessionFile)) {
-								ctx.ui.notify(`Cannot chat with agent #${agent.id} (timed out or session missing).`, "error");
+							if (agent.proc || !existsSync(agent.sessionFile)) {
+								ctx.ui.notify(`Cannot chat with agent #${agent.id} (process exiting or session missing).`, "error");
 								tui.requestRender();
 								return;
 							}
@@ -1612,8 +1706,8 @@ export default function baseAgents(pi: ExtensionAPI) {
 				ctx.ui.notify("Agent is still running. Wait for it to finish or use /akill.", "warning");
 				return;
 			}
-			if (state.timedOut) {
-				ctx.ui.notify(`Agent #${id} timed out and cannot be continued.`, "error");
+			if (state.proc) {
+				ctx.ui.notify(`Agent #${id} process has not exited.`, "warning");
 				return;
 			}
 			if (!existsSync(state.sessionFile)) {
@@ -1679,8 +1773,8 @@ export default function baseAgents(pi: ExtensionAPI) {
 				ctx.ui.notify(`Agent #${id} is still running. Wait for it to finish or use /akill ${id}.`, "warning");
 				return;
 			}
-			if (state.timedOut) {
-				ctx.ui.notify(`Agent #${id} timed out and cannot be continued.`, "error");
+			if (state.proc) {
+				ctx.ui.notify(`Agent #${id} process has not exited.`, "warning");
 				return;
 			}
 			// Verify session file exists
@@ -1689,18 +1783,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 				return;
 			}
 
-			// Reset state for continuation
-			state.status = "running";
-			state.task = prompt;
-			state.lastAssistantText = "";
-			state.toolCount = 0;
-			state.turnCount++;
-			state.elapsed = 0;
-			state.startTime = Date.now();
-			state.killed = false;
-			state.timedOut = false;
-			state.stderrLines = [];
-			state.lastTool = undefined;
+			beginAgentRun(state, prompt);
 
 			const toolList = state.tools
 				? state.tools.split(",").map((t) => t.trim()).filter(Boolean)
@@ -1718,22 +1801,21 @@ export default function baseAgents(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("aclear", {
-		description: "Remove all finished/errored agents from UI",
+		description: "Hide finished/errored agent widgets without deleting agents, results or history",
 		handler: async (_args, ctx) => {
 			if (!ctx.hasUI) return;
 			let count = 0;
 			for (const [id, state] of agents) {
-				if (state.status !== "running") {
-					clearAgentState(id);
+				if (state.status !== "running" && !state.widgetHidden) {
+					state.widgetHidden = true;
 					ctx.ui.setWidget(`agent-${id}`, undefined);
-					agents.delete(id);
 					count++;
 				}
 			}
 			ctx.ui.notify(
 				count > 0
-					? `Cleared ${count} agent${count !== 1 ? "s" : ""}.`
-					: "No finished agents to clear.",
+					? `Hidden ${count} agent widget${count !== 1 ? "s" : ""}. Agents and results remain available via /agents and agent tools.`
+					: "No finished agent widgets to hide.",
 				count > 0 ? "success" : "info"
 			);
 		},
@@ -1757,14 +1839,15 @@ export default function baseAgents(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_e, ctx) => {
+		for (const timer of pendingNotifications.values()) clearTimeout(timer);
+		pendingNotifications.clear();
 		activeCtx = ctx;
 		modelTiers = loadModelTiers(ctx.cwd);
-		// Clean up any leftover agents from a previous session
-		for (const [id, state] of agents) {
-			if (state.proc) killProcess(state.proc);
-			if (state.proc) scheduleForceKill(state.proc);
-			ctx.ui.setWidget(`agent-${id}`, undefined);
-		}
+		// Retain interrupted diagnostics and release old run deadlines before replacing state.
+		killAllAgents();
+		for (const timer of runtimeTimers.values()) clearTimeout(timer);
+		runtimeTimers.clear();
+		for (const id of agents.keys()) ctx.ui.setWidget(`agent-${id}`, undefined);
 		agents.clear();
 		stopTimer();
 		ctx.ui.notify("BaseAgents (Orchestration) Loaded", "info");
@@ -1772,21 +1855,22 @@ export default function baseAgents(pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", async () => {
 		stopTimer();
+		for (const timer of pendingNotifications.values()) clearTimeout(timer);
+		pendingNotifications.clear();
+		activeCtx = undefined;
 		killAllAgents();
 		for (const state of agents.values()) {
-			// Clean up session file
-			if (state.sessionFile && existsSync(state.sessionFile)) {
-				try { unlinkSync(state.sessionFile); } catch {}
+			if (state.status !== "done") continue;
+			const completions = Array.from({ length: state.runSeq }, (_, index) => readCompletionEnvelope(state.sessionFile, index + 1));
+			// Keep the shared transcript if any earlier run failed or diagnostics are missing.
+			if (completions.some((completion) => !completion || completion.status === "error" || completion.outcome === "interrupted")) continue;
+			try { if (existsSync(state.sessionFile)) unlinkSync(state.sessionFile); } catch {}
+			for (let runSeq = 1; runSeq <= state.runSeq; runSeq++) {
+				try {
+					const completionFile = getCompletionFilePath(state.sessionFile, runSeq);
+					if (existsSync(completionFile)) unlinkSync(completionFile);
+				} catch {}
 			}
-		}
-		// Clean up orphaned session files in project-local dirs
-		const sessionDirs = new Set(Array.from(agents.values()).map((s) => path.dirname(s.sessionFile)));
-		for (const sessionDir of sessionDirs) {
-			cleanSessionDir(sessionDir);
-		}
-		// Also clean activeCtx project dir if set (handles case where agents were cleared)
-		if (activeCtx?.cwd) {
-			cleanSessionDir(path.resolve(activeCtx.cwd, ".pi", "agent-sessions", "subagents"));
 		}
 	});
 }
