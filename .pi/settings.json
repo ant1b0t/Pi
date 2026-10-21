@@ -20,23 +20,11 @@
     "opencode-go/deepseek-v4-pro",
     "cpamc/gpt-6.1-sol",
     "cpamc/gpt-6-luna",
-    "cpamc/gpt-6-astra",
-    "cpamc/deepseek-v4.1-flash",
-    "cpamc/glm-5.3-flash",
-    "cpamc/mimo-v2.6-flash",
-    "cpamc/minimax-m3",
-    "cpamc/qwen3.8-flash",
-    "cpamc/glm-5.3",
-    "cpamc/qwen3.8-max",
-    "cpamc/kimi-k3",
-    "cpamc/mimo-v2.6-pro",
-    "cpamc/deepseek-v4-pro"
+    "cpamc/gpt-6-astra"
   ],
   "modelThinkingLevels": {
     "cpamc/gpt-6.1-sol": "high",
     "cpamc/gpt-6-luna": "high",
-    "cpamc/gpt-6-astra": "high",
-    "cpamc/glm-5.3": "high",
-    "cpamc/glm-5.3-flash": "high"
+    "cpamc/gpt-6-astra": "high"
   }
 }
