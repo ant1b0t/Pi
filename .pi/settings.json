@@ -8,13 +8,35 @@
   ],
   "extensions": [],
   "enabledModels": [
+    "opencode-go/deepseek-v4.1-flash",
+    "opencode-go/glm-5.3-flash",
+    "opencode-go/mimo-v2.6-flash",
+    "opencode-go/minimax-m3",
+    "opencode-go/qwen3.8-flash",
+    "opencode-go/glm-5.3",
+    "opencode-go/qwen3.8-max",
+    "opencode-go/kimi-k3",
+    "opencode-go/mimo-v2.6-pro",
+    "opencode-go/deepseek-v4-pro",
     "cpamc/gpt-6.1-sol",
     "cpamc/gpt-6-luna",
-    "cpamc/gpt-6-astra"
+    "cpamc/gpt-6-astra",
+    "cpamc/deepseek-v4.1-flash",
+    "cpamc/glm-5.3-flash",
+    "cpamc/mimo-v2.6-flash",
+    "cpamc/minimax-m3",
+    "cpamc/qwen3.8-flash",
+    "cpamc/glm-5.3",
+    "cpamc/qwen3.8-max",
+    "cpamc/kimi-k3",
+    "cpamc/mimo-v2.6-pro",
+    "cpamc/deepseek-v4-pro"
   ],
   "modelThinkingLevels": {
     "cpamc/gpt-6.1-sol": "high",
     "cpamc/gpt-6-luna": "high",
-    "cpamc/gpt-6-astra": "high"
+    "cpamc/gpt-6-astra": "high",
+    "cpamc/glm-5.3": "high",
+    "cpamc/glm-5.3-flash": "high"
   }
 }

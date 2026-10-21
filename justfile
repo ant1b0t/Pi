@@ -121,13 +121,13 @@ ext-swarm:
 ext-swarm-full:
     pi -e extensions/swarm/extension.ts -e extensions/base/base-tools.ts -e extensions/examples/minimal.ts
 
-# 17h. OpenCode Go provider: curated open models subscription
+# 17h. OpenCode Go: built-in provider is current, so no provider extension is loaded
 ext-opencode-go:
-    pi -e extensions/provider-opencode-go.ts -e extensions/examples/minimal.ts
+    pi -e extensions/examples/minimal.ts
 
 # 17i. OpenCode Go with base tools
 ext-opencode-go-full:
-    pi -e extensions/provider-opencode-go.ts -e extensions/base/base-tools.ts -e extensions/examples/minimal.ts
+    pi -e extensions/base/base-tools.ts -e extensions/examples/minimal.ts
 
 # === BASE AGENTS (Modular Sub-Agent System) ===
 

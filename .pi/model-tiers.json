@@ -1,11 +1,11 @@
 {
   "high": [
-    "cpamc/gpt-6.1-sol"
+    "opencode-go/kimi-k3"
   ],
   "medium": [
-    "cpamc/gpt-6-luna"
+    "opencode-go/qwen3.8-flash"
   ],
   "low": [
-    "cpamc/gpt-6-luna"
+    "opencode-go/mimo-v2.6-flash"
   ]
 }
