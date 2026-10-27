@@ -9,10 +9,50 @@ import { Type, type Static } from "typebox";
 
 // ── Model Tiers ────────────────────────────────────────────────────────
 
+/**
+ * Уровень thinking для записи tier'а.
+ * Допустимые значения совпадают с ThinkingLevel из model-tiers.ts.
+ */
+export const ModelTierEffortSchema = Type.Union([
+	Type.Literal("off"),
+	Type.Literal("minimal"),
+	Type.Literal("low"),
+	Type.Literal("medium"),
+	Type.Literal("high"),
+	Type.Literal("xhigh"),
+	Type.Literal("max"),
+]);
+
+/** Непустая (после trim) строка модели. */
+const ModelStringSchema = Type.String({
+	pattern: "\\S",
+	description: "Model string, non-empty after trimming",
+});
+
+/**
+ * Запись tier'а: строка модели или объект { model, effort? }.
+ * effort опционален — при отсутствии действует legacy-маппинг tier'а.
+ */
+export const ModelTierEntrySchema = Type.Union([
+	ModelStringSchema,
+	Type.Object({
+		model: ModelStringSchema,
+		effort: Type.Optional(ModelTierEffortSchema),
+	}),
+]);
+
+export type ModelTierEntry = Static<typeof ModelTierEntrySchema>;
+
+/** Tier — одна запись или непустой массив записей (смешанные массивы допустимы). */
+const ModelTierValueSchema = Type.Union([
+	ModelTierEntrySchema,
+	Type.Array(ModelTierEntrySchema, { minItems: 1 }),
+]);
+
 export const ModelTiersSchema = Type.Object({
-	high: Type.Union([Type.String(), Type.Array(Type.String())]),
-	medium: Type.Union([Type.String(), Type.Array(Type.String())]),
-	low: Type.Union([Type.String(), Type.Array(Type.String())]),
+	high: ModelTierValueSchema,
+	medium: ModelTierValueSchema,
+	low: ModelTierValueSchema,
 });
 
 export type ModelTiers = Static<typeof ModelTiersSchema>;

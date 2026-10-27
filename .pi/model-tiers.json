@@ -1,12 +1,24 @@
 {
   "high": [
-    "cpamc/gpt-6.1-sol"
+    {
+      "model": "cpamc/gpt-6.1-sol",
+      "effort": "high"
+    }
   ],
   "medium": [
-    "opencode-go/deepseek-v4.1-flash"
+    {
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "effort": "xhigh"
+    }
   ],
   "low": [
-    "opencode-go/deepseek-v4.1-flash",
-    "cpamc/gpt-6-luna"
+    {
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "effort": "low"
+    },
+    {
+      "model": "cpamc/gpt-6-luna",
+      "effort": "high"
+    }
   ]
 }

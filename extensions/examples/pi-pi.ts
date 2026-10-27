@@ -22,7 +22,7 @@ import { spawn } from "child_process";
 import { readdirSync, readFileSync, existsSync, mkdirSync } from "fs";
 import { join, resolve } from "path";
 import { applyExtensionDefaults } from "./themeMap.ts";
-import { currentModelString, loadModelTiers, resolveModel, resolveThinkingLevel, type ModelTiers } from "../base/model-tiers.ts";
+import { currentModelString, loadModelTiers, resolveModelSelection, type ModelTiers } from "../base/model-tiers.ts";
 
 // ── Types ────────────────────────────────────────
 
@@ -285,11 +285,12 @@ export default function (pi: ExtensionAPI) {
 		}, 1000);
 
 		const parentModel = currentModelString(ctx.model) || "openrouter/google/gemini-3-flash-preview";
-		const model = resolveModel({
+		const selection = resolveModelSelection({
 			tier: state.def.tier,
 			tiers: modelTiers,
 			fallback: parentModel,
-		}) || parentModel;
+		});
+		const model = selection.model || parentModel;
 
 		const args = [
 			"--mode", "json",
@@ -298,7 +299,7 @@ export default function (pi: ExtensionAPI) {
 			"--no-extensions",
 			"--model", model,
 			"--tools", state.def.tools,
-			"--thinking", resolveThinkingLevel(state.def.tier),
+			"--thinking", selection.thinkingLevel,
 			"--append-system-prompt", state.def.systemPrompt,
 			question,
 		];

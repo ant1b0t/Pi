@@ -21,7 +21,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { applyExtensionDefaults } from "./themeMap.ts";
-import { currentModelString, loadModelTiers, resolveModel, resolveThinkingLevel, type ModelTiers, type ModelTier } from "../base/model-tiers.ts";
+import { currentModelString, loadModelTiers, resolveModelSelection, type ModelTiers, type ModelTier } from "../base/model-tiers.ts";
 
 interface SubState {
 	id: number;
@@ -138,11 +138,12 @@ export default function (pi: ExtensionAPI) {
 		ctx: any,
 	): Promise<void> {
 		const parentModel = currentModelString(ctx.model) || "openrouter/google/gemini-3-flash-preview";
-		const model = resolveModel({
+		const selection = resolveModelSelection({
 			tier: state.tier,
 			tiers: modelTiers,
 			fallback: parentModel,
-		}) || parentModel;
+		});
+		const model = selection.model || parentModel;
 
 		return new Promise<void>((resolve) => {
 			const proc = spawn("pi", [
@@ -153,7 +154,7 @@ export default function (pi: ExtensionAPI) {
 				"--no-extensions",
 				"--model", model,
 				"--tools", "read,bash,grep,find,ls",
-				"--thinking", resolveThinkingLevel(state.tier),
+				"--thinking", selection.thinkingLevel,
 				prompt,
 			], {
 				stdio: ["ignore", "pipe", "pipe"],

@@ -69,13 +69,12 @@ import {
 } from "./agent-runner.ts";
 import {
 	loadModelTiers,
-	resolveModel,
-	reverseLookupTier,
-	resolveThinkingLevel,
+	resolveModelSelection,
 	currentModelString,
 	modelLabel,
 	type ModelTier,
 	type ModelTiers,
+	type ThinkingLevel,
 } from "./model-tiers.ts";
 
 // ── Types ───────────────────────────────────────────────────────────────
@@ -108,6 +107,8 @@ interface SubAgentState {
 	tags?: string | string[];
 	/** Resolved model string used for this agent (e.g. "anthropic/claude-haiku-3-5"). */
 	model?: string;
+	/** Effort selected together with the model; retained on continuation. */
+	thinkingLevel: ThinkingLevel;
 	/** Tier that was requested ("high" | "medium" | "low"), for display purposes. */
 	tier?: ModelTier;
 	/** Monotonic run sequence number. Incremented on spawn/continue. Used to match notifications to runs. */
@@ -1038,7 +1039,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 				toolList,
 				extensions,
 				model,
-				thinkingLevel: resolveThinkingLevel(state.tier),
+				thinkingLevel: state.thinkingLevel,
 				cwd,
 				isContinuation: state.runSeq > 1,
 				extraEnv: buildAllowedToolsEnv(toolList)
@@ -1145,7 +1146,8 @@ export default function baseAgents(pi: ExtensionAPI) {
 			const toolList = state.tools
 				? state.tools.split(",").map((t) => t.trim()).filter(Boolean)
 				: resolveTagsToTools("Bash");
-			const model = currentModelString(ctx.model);
+			const model = state.model ?? currentModelString(ctx.model);
+			state.model = model;
 			runAgent(state, toolList, model, () => resolve());
 		});
 	}
@@ -1265,8 +1267,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 			const id = nextAgentId();
 			const toolList = resolveToolsParam(params.tags);
 			const parentModel = currentModelString(ctx.model);
-			const model = resolveModel({ model: params.model, tier: params.tier, tiers: modelTiers, fallback: parentModel });
-			const resolvedTier = params.tier ?? reverseLookupTier(model ?? "", modelTiers);
+			const { model, thinkingLevel, tier: resolvedTier } = resolveModelSelection({ model: params.model, tier: params.tier, tiers: modelTiers, fallback: parentModel });
 			const phase = normalizePhase(params.phase);
 			let spawnMode = normalizeSpawnMode(params.mode);
 			const forkContextMode = normalizeForkContextMode(params.context);
@@ -1308,6 +1309,7 @@ export default function baseAgents(pi: ExtensionAPI) {
 				tools: toolList.join(","),
 				tags: params.tags,
 				model,
+				thinkingLevel,
 				tier: resolvedTier,
 				runSeq: 1,
 				notifyMode: params.notify || "ui",
@@ -1501,12 +1503,16 @@ export default function baseAgents(pi: ExtensionAPI) {
 			state.tools = toolList.join(",");
 			state.tags = params.tags ?? state.tags;
 
-			// Resolve model: explicit param > tier param > previously set model > parent model
+			// Keep the selected pair unless the caller explicitly changes model or tier.
 			const parentModel = currentModelString(ctx.model);
-			const model = resolveModel({ model: params.model, tier: params.tier, tiers: modelTiers, fallback: state.model ?? parentModel });
+			if (params.model || params.tier) {
+				const selection = resolveModelSelection({ model: params.model, tier: params.tier, tiers: modelTiers, fallback: state.model ?? parentModel });
+				state.model = selection.model;
+				state.thinkingLevel = selection.thinkingLevel;
+				state.tier = selection.tier;
+			}
+			const model = state.model ?? parentModel;
 			state.model = model;
-			const inferredTier = reverseLookupTier(model ?? "", modelTiers);
-			state.tier = params.tier ?? inferredTier ?? (params.model ? undefined : state.tier);
 
 			agents.set(params.id, state);
 			updateAllWidgets();

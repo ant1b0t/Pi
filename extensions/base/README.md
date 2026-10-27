@@ -13,7 +13,7 @@
 | `agent-tags.ts` | Теги → инструменты | `resolveTagsToTools`, `getBuiltinTools` |
 | `coordinator-mode.ts` | Фазы orchestration | `normalizePhase`, `buildPhaseGuidance`, `validatePhaseTransition` |
 | `fork-context.ts` | Форк контекста родителя | `normalizeSpawnMode`, `buildForkContextPrompt` |
-| `model-tiers.ts` | Уровни моделей | `loadModelTiers`, `resolveModel`, `currentModelString` |
+| `model-tiers.ts` | Уровни моделей | `loadModelTiers`, `resolveModelSelection`, `resolveModel`, `currentModelString` |
 | `agent-defs.ts` | Парсинг .md агентов | `parseAgentFile`, `scanAgentDirs` |
 | `themeMap.ts` | UI темы | `applyExtensionDefaults` |
 | `tool-contract.ts` | Контракты ошибок | `notFound`, `unauthorized`, `rateLimited` |
@@ -149,20 +149,34 @@ export default function (pi: ExtensionAPI) {
 
 ### .pi/model-tiers.json
 
+Tier — это одна запись или массив записей. Запись — строка модели либо объект `{ "model": ..., "effort": ... }`:
+
 ```json
 {
-  "high": "openrouter/anthropic/claude-sonnet-4",
-  "medium": "openrouter/google/gemini-3-flash-preview",
-  "low": "openrouter/google/gemini-3-flash-preview"
+  "high": { "model": "openrouter/anthropic/claude-sonnet-4", "effort": "high" },
+  "medium": [
+    "openrouter/google/gemini-3-flash-preview",
+    { "model": "openrouter/openai/gpt-6-luna", "effort": "low" }
+  ],
+  "low": [
+    { "model": "openrouter/google/gemini-3-flash-preview", "effort": "minimal" }
+  ]
 }
 ```
 
-Tier одновременно определяет уровень thinking дочернего Pi-процесса:
+Смешанные массивы (строки и объекты) допустимы. Модель должна быть непустой строкой после trim.
 
-- `low` → `--thinking high`
-- `medium` → `--thinking xhigh`
-- `high` → `--thinking high`
-- tier не указан → модель родителя и `--thinking off`
+`effort` принимает `off | minimal | low | medium | high | xhigh | max` и задаёт `--thinking` дочернего Pi-процесса. Pi ограничивает фактический уровень возможностями модели. Пустой массив, невалидный `effort` или пустая модель приводят к отклонению файла целиком: загрузчик пробует `~/.pi/model-tiers.json`, затем возвращает `null`, если валидного конфига нет.
+
+Семантика выбора (`resolveModelSelection`):
+
+- Явный `model`: берётся `effort` из записи своего tier'а, где модель совпала; без tier — из первой совпавшей записи в порядке `high` → `medium` → `low`. Если совпадения с `effort` нет, действует маппинг tier'а, а без tier — `off`.
+- Запись без `effort` использует legacy-маппинг tier'а: `low` → `high`, `medium` → `xhigh`, `high` → `high`.
+- Ни `model`, ни tier не указаны: модель родителя и `--thinking off`, даже если родительская модель есть в конфиге тиров.
+- Массив — round-robin; ротация происходит ровно один раз за вызов, и выбранная запись задаёт и модель, и её `effort`.
+- `agent_continue`, `/acont` и чат агента сохраняют выбранные модель и effort. Явный `model` или tier в `agent_continue` заново выбирает пару; при дублировании модели в разных тирах указывайте tier для однозначного выбора.
+
+`resolveModel` и `resolveThinkingLevel` оставлены для обратной совместимости; примерные расширения используют `resolveModelSelection`.
 
 При независимых задачах предпочитайте `agent_wait_any(join:true)`: обрабатывайте готовые результаты и запускайте зависимые этапы по мере готовности. `agent_wait_all` нужен для общего интеграционного барьера. Ограниченные исправления возвращайте через `agent_continue` исполнителю с полезным контекстом; новый агент нужен для независимого review или другой специализации.
 

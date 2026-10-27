@@ -30,7 +30,7 @@ import { Type } from "@sinclair/typebox";
 import { spawn } from "child_process";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync, readdirSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
-import { currentModelString, loadModelTiers, resolveModel, resolveThinkingLevel, type ModelTier } from "./model-tiers.ts";
+import { currentModelString, loadModelTiers, resolveModelSelection, type ModelTier } from "./model-tiers.ts";
 import {
 	invalidArgument,
 	notFound,
@@ -375,8 +375,8 @@ async function runTaskWorker(options: {
 }): Promise<{ status: "done" | "error"; exitCode: number; elapsed: number; turnCount: number; toolCalls: { name: string; preview: string }[]; outputPreview: string; text: string; error?: string; }> {
 	const start = Date.now();
 	const piCli = resolvePiCliPath();
-	const resolvedModel = options.model || resolveModel({ tier: options.tier, tiers: loadModelTiers(options.cwd), fallback: undefined });
-	const args = [piCli, "--mode", "json", "-p", "--no-session", "--no-extensions", ...(resolvedModel ? ["--model", resolvedModel] : []), "--tools", options.tools, "--thinking", resolveThinkingLevel(options.tier), options.description];
+	const { model: resolvedModel, thinkingLevel } = resolveModelSelection({ tier: options.tier, tiers: loadModelTiers(options.cwd), fallback: options.model });
+	const args = [piCli, "--mode", "json", "-p", "--no-session", "--no-extensions", ...(resolvedModel ? ["--model", resolvedModel] : []), "--tools", options.tools, "--thinking", thinkingLevel, options.description];
 
 	return await new Promise((resolve) => {
 		const proc = spawn(process.execPath, args, {

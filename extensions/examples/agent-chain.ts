@@ -28,7 +28,7 @@ import { spawn } from "child_process";
 import { readFileSync, existsSync, mkdirSync, unlinkSync } from "fs";
 import { join } from "path";
 import { applyExtensionDefaults } from "../base/themeMap.ts";
-import { currentModelString, loadModelTiers, resolveModel, resolveThinkingLevel, type ModelTiers } from "../base/model-tiers.ts";
+import { currentModelString, loadModelTiers, resolveModelSelection, type ModelTiers } from "../base/model-tiers.ts";
 import { scanAgentDirs, type AgentDef } from "../base/agent-defs.ts";
 
 // ── Types ────────────────────────────────────────
@@ -278,11 +278,12 @@ export default function (pi: ExtensionAPI) {
 		ctx: any,
 	): Promise<{ output: string; exitCode: number; elapsed: number }> {
 		const parentModel = currentModelString(ctx.model) || "openrouter/google/gemini-3-flash-preview";
-		const model = resolveModel({
+		const selection = resolveModelSelection({
 			tier: agentDef.tier,
 			tiers: modelTiers,
 			fallback: parentModel,
-		}) || parentModel;
+		});
+		const model = selection.model || parentModel;
 
 		const agentKey = agentDef.name.toLowerCase().replace(/\s+/g, "-");
 		const agentSessionFile = join(sessionDir, `chain-${agentKey}.json`);
@@ -294,7 +295,7 @@ export default function (pi: ExtensionAPI) {
 			"--no-extensions",
 			"--model", model,
 			"--tools", agentDef.tools,
-			"--thinking", resolveThinkingLevel(agentDef.tier),
+			"--thinking", selection.thinkingLevel,
 			"--append-system-prompt", agentDef.systemPrompt,
 			"--session", agentSessionFile,
 		];

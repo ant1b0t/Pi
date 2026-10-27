@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";
 import * as actualRunner from "../extensions/base/agent-runner.ts?lifecycle-test-original";
-import { mkdtempSync, rmSync, existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
@@ -34,6 +34,7 @@ const schema = (kind: string, options: any = {}) => ({ kind, ...options });
 
 mock.module(tuiPath, () => ({
 	Editor: class {},
+	Text: class {},
 	Key: { escape: "escape", up: "up", down: "down", enter: "enter" },
 	matchesKey: () => false,
 	truncateToWidth: (text: string) => text,
@@ -51,6 +52,7 @@ mock.module(typeboxPath, () => ({
 }));
 const runnerMock = () => ({
 	...actualRunner,
+	killProcess(proc: ChildProcess) { proc.kill("SIGTERM"); },
 	spawnPiProcess(options: Record<string, any>) {
 		if (nextSpawnError) { const error = nextSpawnError; nextSpawnError = undefined; throw error; }
 		spawnOptions.push(options);
@@ -205,6 +207,58 @@ function emitAnswer(child: FakeChild, text: string): void {
 function sessionDir(): string {
 	return path.join(fixture.cwd, ".pi", "agent-sessions", "subagents");
 }
+
+async function loadTierFixture(tiers: unknown): Promise<void> {
+	mkdirSync(path.join(fixture.cwd, ".pi"), { recursive: true });
+	writeFileSync(path.join(fixture.cwd, ".pi", "model-tiers.json"), JSON.stringify(tiers));
+	for (const handler of fixture.hooks.get("session_start") ?? []) await handler({}, fixture.ctx);
+}
+
+describe("base-agents model effort", () => {
+	it("passes the selected effort to the child and preserves the pair on all continuations", async () => {
+		await loadTierFixture({
+			high: "fake/high",
+			medium: { model: "fake/shared", effort: "xhigh" },
+			low: [{ model: "fake/shared", effort: "off" }, { model: "fake/shared", effort: "max" }],
+		});
+		await fixture.spawn({ tier: "low" });
+		const selected = spawnOptions[0];
+		expect(selected.model).toBe("fake/shared");
+		expect(["off", "max"]).toContain(selected.thinkingLevel);
+		children[0].close(0);
+		await fixture.call("agent_continue", { id: 1, prompt: "Continue the selected task" });
+		expect(spawnOptions[1].model).toBe(selected.model);
+		expect(spawnOptions[1].thinkingLevel).toBe(selected.thinkingLevel);
+		children[1].close(0);
+		await fixture.commands.get("acont").handler("1 Continue through command", fixture.ctx);
+		expect(spawnOptions[2].thinkingLevel).toBe(selected.thinkingLevel);
+		await fixture.spawn({ tier: "low" });
+		expect(spawnOptions[3].thinkingLevel).not.toBe(selected.thinkingLevel);
+		children[2].close(0);
+		await fixture.call("agent_continue", { id: 1, tier: "medium", prompt: "Change the selected tier" });
+		expect(spawnOptions[4].model).toBe("fake/shared");
+		expect(spawnOptions[4].thinkingLevel).toBe("xhigh");
+		children[4].close(0);
+		await fixture.call("agent_continue", { id: 1, model: "fake/unknown", prompt: "Change the selected model" });
+		expect(spawnOptions[5].model).toBe("fake/unknown");
+		expect(spawnOptions[5].thinkingLevel).toBe("off");
+	});
+
+	it("uses explicit model effort within the requested tier but never infers parent effort", async () => {
+		await loadTierFixture({
+			high: { model: "fake/model", effort: "max" },
+			medium: { model: "fake/shared", effort: "xhigh" },
+			low: { model: "fake/shared", effort: "low" },
+		});
+		await fixture.spawn();
+		expect(spawnOptions[0].model).toBe("fake/model");
+		expect(spawnOptions[0].thinkingLevel).toBe("off");
+		await fixture.spawn({ model: "fake/shared", tier: "low" });
+		expect(spawnOptions[1].thinkingLevel).toBe("low");
+		await fixture.spawn({ model: "fake/shared" });
+		expect(spawnOptions[2].thinkingLevel).toBe("xhigh");
+	});
+});
 
 describe("base-agents lifecycle regression", () => {
 	it("tool-only recovery never returns an older report, even without a completion sidecar", async () => {
