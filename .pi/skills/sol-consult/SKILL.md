@@ -22,7 +22,7 @@ Spawn the adviser with:
   "name": "sol-adviser",
   "tags": "Web",
   "tier": "high",
-  "model": "openai-codex/gpt-6.1-sol",
+  "model": "cpamc/gpt-6.2-sol",
   "mode": "fresh",
   "notify": "off"
 }

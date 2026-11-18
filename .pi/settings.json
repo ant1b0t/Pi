@@ -18,13 +18,13 @@
     "opencode-go/kimi-k3",
     "opencode-go/mimo-v2.6-pro",
     "opencode-go/deepseek-v4-pro",
-    "cpamc/gpt-6.1-sol",
+    "cpamc/gpt-6.2-sol",
     "cpamc/gpt-6-luna",
-    "cpamc/gpt-6-astra"
+    "cpamc/gpt-6.2-astra"
   ],
   "modelThinkingLevels": {
-    "cpamc/gpt-6.1-sol": "high",
+    "cpamc/gpt-6.2-sol": "high",
     "cpamc/gpt-6-luna": "high",
-    "cpamc/gpt-6-astra": "high"
+    "cpamc/gpt-6.2-astra": "high"
   }
 }
